@@ -1,4 +1,4 @@
-### README.md (copy-paste ready)
+### README.md 
 
 ```markdown
 # Weave Generator MVP
