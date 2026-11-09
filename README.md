@@ -1,40 +1,38 @@
-### README.md 
+# Weave Generator
 
-```markdown
-# Weave Generator MVP
+Weave Generator is a **Python desktop application** (Tkinter) for designing handweaving drafts. You edit the **threading**, **tie-up** and **treadling** (or a direct **liftplan**), and the **drawdown** is computed from them, the same model used by professional weaving software such as [WeaveIt](https://www.weaveit.com/).
 
-Weave Generator is a simple **Python desktop application** built with **Tkinter** that lets you design basic over/under weave patterns on a grid and export them as PNG images.
+```text
+ [ threading ]  [ tie-up    ]
+ [ drawdown  ]  [ treadling ]
+```
 
 You can:
-- Define the **grid size** (warp x weft)
-- **Click cells** to toggle between “under” and “over”
-- **Pick two colors** for the weave
-- **Download** the final pattern as a **PNG** using a file dialog
+- Edit **threading**, **tie-up** and **treadling** by clicking or dragging; the **drawdown** updates instantly
+- Use several **treadles per pick**, or switch to a direct **liftplan**
+- Choose a **rising** or **sinking** shed
+- Set up to **400 ends**, **400 picks**, **32 shafts** and **32 treadles**
+- **Undo / redo** every edit (Ctrl+Z, Ctrl+Y)
+- **Zoom** and scroll large drafts
+- Pick **warp** and **weft** colors
+- **Export** the whole draft (all four panels with numbered rulers) as a PNG
 
 ---
 
 ## Requirements
 
 - **Python**: 3.10+ (tested with Python 3.12)
-- **Libraries**:
-  - Tkinter (included with standard Python on Windows)
-  - Pillow (PIL fork) for image export
-
-Install Pillow with:
+- **Libraries**: Tkinter (included with standard Python on Windows), Pillow, NumPy
 
 ```bash
-pip install pillow
+pip install -r requirements.txt
 ```
 
 ---
 
 ## Getting Started
 
-1. **Clone or download** this project into a folder, for example:
-
-   ```text
-   C:\Users\<you>\Desktop\Weave Generator
-   ```
+1. **Clone or download** this project, for example into `C:\Users\<you>\Desktop\Weave Generator`.
 
 2. (Optional but recommended) **Create a virtual environment**:
 
@@ -46,7 +44,7 @@ pip install pillow
 3. **Install dependencies**:
 
    ```bash
-   pip install pillow
+   pip install -r requirements.txt
    ```
 
 4. **Run the application**:
@@ -55,66 +53,73 @@ pip install pillow
    python weave_generator.py
    ```
 
-This should open a desktop window titled **“Weave Generator MVP”**.
+It opens with a 4-shaft 2/2 twill so you can see how the panels relate.
 
 ---
 
 ## How to Use
 
-### 1. Set grid size
+### Reading the draft
 
-- At the **top** of the window, enter:
-  - **Warp** (columns)
-  - **Weft** (rows)
-- Default is **16 x 16**.
-- Click **Generate** to create a new blank grid.
-- The grid is clamped to a maximum of **40 x 40** to stay responsive.
+- **Ends** are numbered **right to left**, **picks** top to bottom, **shafts** bottom to top and **treadles** left to right, as in standard draft notation.
+- The **drawdown** is computed and cannot be clicked. Edit the threading, tie-up or treadling instead.
+- Hover over any cell to see its end / pick / shaft / treadle in the status bar.
 
-### 2. Edit the weave pattern
+### Editing
 
-- Click on any **cell** in the grid:
-  - `0` (under) switches to `1` (over)
-  - `1` (over) switches back to `0` (under)
-- The canvas **updates immediately** after each click.
+| Panel | Click or drag to... |
+|---|---|
+| **Threading** | Thread an end on a shaft. Click a threaded cell again to unthread it. Dragging threads each end you pass over. |
+| **Tie-up** | Toggle which shafts each treadle is tied to. |
+| **Treadling** | Toggle which treadles are pressed on each pick (several per pick are allowed). |
+| **Liftplan** | (Liftplan mode) Toggle which shafts lift on each pick, replacing the tie-up and treadling. |
 
-### 3. Choose thread colors
+A whole press-drag-release is a single undo step.
 
-- At the **bottom**, you’ll see:
-  - **Over color** (left) with a color swatch and **Pick** button
-  - **Under color** (right) with a color swatch and **Pick** button
-- Click **Pick** to open the color chooser, then select any color.
-- The pattern redraws with the new colors.
+### Toolbar
 
-### 4. Download the pattern as PNG
-
-- Click the **“Download Pattern”** button at the bottom.
-- A standard **Save As** dialog appears:
-  - Choose the folder and filename (e.g. `weave_pattern.png`)
-  - Click **Save**
-- The app renders the pattern using **Pillow** and saves a **PNG image** to the chosen path.
+- **Ends / Picks / Shafts / Treadles + Apply**: resize the draft, keeping everything that still fits. Ends threaded on a removed shaft become unthreaded.
+- **Rising shed**: on is a rising shed, off is a sinking shed (the cloth is inverted).
+- **Liftplan**: switches the tie-up and treadling for a direct liftplan. Switching it on converts your current treadling, so the cloth does not change.
+- **Undo / Redo / Clear**: clear blanks the threading, tie-up, treadling and liftplan.
+- **Zoom** (`-` / `+` or Ctrl + mouse wheel): very large drafts are drawn smaller than the zoom shown so they stay within a workable size.
+- **Warp / Weft**: the colors of warp-on-top and weft-on-top cells in the drawdown.
+- **Export PNG**: saves all panels, with rulers, as one image.
 
 ---
 
 ## Project Structure
 
-This MVP is intentionally small and simple:
+```text
+weave_generator.py     launcher (kept for `python weave_generator.py` and PyInstaller)
+weavegen/
+  core/                toolkit-independent logic (no Tkinter imports)
+    draft.py           Draft: threading, tie-up, treadling/liftplan, computed drawdown, resize
+    history.py         History: undo/redo over draft snapshots
+    layout.py          DraftLayout: four-panel geometry, hit-testing, ruler labels
+    render.py          draft -> RGB pixel arrays, one per panel
+  io/
+    png.py             whole-draft PNG export via Pillow
+  ui/
+    app.py             Tkinter window, canvas, mouse and toolbar handlers
+tests/                 pytest suite for core and export
+```
 
-- `weave_generator.py` – the **entire application**:
-  - Tkinter window setup
-  - Canvas rendering
-  - Grid logic (0/1 states for under/over)
-  - Color pickers
-  - PNG export via Pillow
+The UI is a thin layer over `weavegen.core`, so the logic can be tested without a display and reused if the UI toolkit changes.
 
-No database, no authentication, and no advanced textile simulation are used.
+## Development
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+python -m weavegen
+```
 
 ---
 
 ## Building a Windows .exe with PyInstaller
 
-You can package the app into a single `.exe` file using **PyInstaller**.
-
-1. Install PyInstaller (inside your environment if you’re using one):
+1. Install PyInstaller (inside your environment if you use one):
 
    ```bash
    pip install pyinstaller
@@ -126,21 +131,15 @@ You can package the app into a single `.exe` file using **PyInstaller**.
    pyinstaller --onefile --windowed weave_generator.py
    ```
 
-3. After it finishes:
-   - Look in the `dist` folder
-   - You should see `weave_generator.exe`
-
-You can distribute that `.exe` to other Windows users (they don’t need Python installed).
+3. The executable is `dist\weave_generator.exe`. Other Windows users do not need Python installed.
 
 ---
 
 ## Notes & Limitations
 
-- Designed for grids up to **40 x 40** for reasonable performance and usability.
-- This is an **MVP**:
-  - No fabric physics, yarn thickness simulation, or advanced textile modeling.
-  - The pattern is purely a graphical over/under grid.
-- Behavior is tested primarily on **Windows** with Python 3.12.
+- Not yet implemented: drawing tools (line, curve, select, copy/paste), pattern generators, per-thread colors, WIF import/export, printing, float finder and yardage, network drafting and double weave.
+- Each end is threaded on at most one shaft.
+- Behavior is tested primarily on **Windows** with Python 3.12. Mouse-wheel scrolling uses the Windows event model.
 
 ---
 
@@ -267,5 +266,3 @@ express Statement of Purpose.
  d. Affirmer understands and acknowledges that Creative Commons is not a
     party to this document and has no duty or obligation with respect to
     this CC0 or use of the Work.
-
-```
