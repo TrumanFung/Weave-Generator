@@ -1080,3 +1080,308 @@ def test_parse_project_names_the_field_and_converts_numbers():
         parse_project({**values, "width": "abc"}, "in")
     with pytest.raises(ValueError, match="Picks per cm: enter a number"):
         parse_project({**values, "ppi": " "}, "cm")
+
+
+# ---- advanced drafting: block substitution, combining, network drafting, reduce, image import ----
+
+def dialog_text(dialog):
+    return dialog.message.cget("text")
+
+
+def window_open(dialog):
+    return bool(dialog.window.winfo_exists())
+
+
+def test_the_new_commands_are_in_the_menus(app):
+    menubar = app.root.nametowidget(app.root.cget("menu"))
+    draft_menu = menubar.nametowidget(menubar.entrycget(2, "menu"))
+    labels = [draft_menu.entrycget(i, "label") for i in range(draft_menu.index("end") + 1)
+              if draft_menu.type(i) != "separator"]
+    for wanted in ("Block substitution...", "Combine drafts...", "Network drafting...",
+                   "Reduce to fewest shafts and treadles"):
+        assert wanted in labels
+    file_menu = menubar.nametowidget(menubar.entrycget(0, "menu"))
+    assert "Import drawdown from image..." in [file_menu.entrycget(i, "label")
+                                              for i in range(file_menu.index("end") + 1)
+                                              if file_menu.type(i) != "separator"]
+
+
+# -- block substitution --
+
+def test_block_substitution_previews_the_expanded_draft_for_the_current_profile(app):
+    app.on_block_substitution()
+    dialog = app._tool_dialogs[app_module.BlockSubstitutionDialog]
+    assert dialog.blocks_var.get() == "4"                           # the twill profile uses blocks 1 to 4
+    assert dialog_text(dialog).startswith("Result: 64 ends x 64 picks, 6 shafts, 10 treadles")
+    assert "block 1 threading = 1 3 2 3" in dialog.text.get("1.0", "end")
+    assert str(dialog.apply_button.cget("state")) == "normal"
+
+
+def test_applying_block_substitution_replaces_the_draft_in_one_undo_step_and_closes(app):
+    before = app.draft.snapshot()
+    depth = undo_depth(app)
+    app.on_block_substitution()
+    dialog = app._tool_dialogs[app_module.BlockSubstitutionDialog]
+    assert dialog.apply()
+    assert (app.draft.ends, app.draft.picks, app.draft.shafts, app.draft.treadles) == (64, 64, 6, 10)
+    assert app.size_vars["ends"].get() == "64" and app.size_vars["shafts"].get() == "6"
+    assert undo_depth(app) == depth + 1 and not window_open(dialog)
+    assert "Profile expanded" in app.status.cget("text")
+    app.on_undo()
+    assert app.draft.ends == 16 and (app.draft.threading == before.threading).all()
+
+
+def test_changing_the_number_of_blocks_rewrites_the_structure_and_bad_profiles_are_explained(app):
+    app.on_block_substitution()
+    dialog = app._tool_dialogs[app_module.BlockSubstitutionDialog]
+    dialog.blocks_var.set("2")
+    dialog.fill()
+    assert "shafts 4" in dialog.text.get("1.0", "end")
+    assert "no threading unit for block 3" in dialog_text(dialog)        # the profile uses four blocks
+    assert str(dialog.apply_button.cget("state")) == "disabled"
+    depth = undo_depth(app)
+    assert dialog.apply() is False and app.draft.ends == 16 and undo_depth(app) == depth
+    dialog.blocks_var.set("99")
+    dialog.fill()
+    assert "1 to 15 blocks" in dialog_text(dialog)
+
+
+def test_editing_the_structure_text_updates_the_result_and_reports_mistakes(app):
+    app.on_block_substitution()
+    dialog = app._tool_dialogs[app_module.BlockSubstitutionDialog]
+    dialog.set_text("shafts 4\ntreadles 4\ntieup 1 = 1\n"
+                    + "".join(f"block {b} threading = {b}\nblock {b} treadling = {b}\n" for b in range(1, 5)))
+    dialog.refresh()
+    assert dialog_text(dialog).startswith("Result: 16 ends x 16 picks, 4 shafts, 4 treadles")
+    dialog.set_text("shafts 4\ntreadles 4\nnonsense")
+    dialog.refresh()
+    assert "line 3: cannot understand" in dialog_text(dialog) and str(dialog.apply_button.cget("state")) == "disabled"
+
+
+def test_the_custom_choice_keeps_the_text_the_user_wrote(app):
+    app.on_block_substitution()
+    dialog = app._tool_dialogs[app_module.BlockSubstitutionDialog]
+    dialog.set_text("# mine\nshafts 4\ntreadles 4\n")
+    dialog.family_var.set(dialog.CUSTOM)
+    dialog.fill()
+    assert dialog.text.get("1.0", "end").startswith("# mine")
+
+
+def test_block_substitution_reports_what_it_left_out(app):
+    app.draft.threading[0] = -1
+    app.on_block_substitution()
+    dialog = app._tool_dialogs[app_module.BlockSubstitutionDialog]
+    assert "1 unthreaded profile end(s) were left out" in dialog_text(dialog)
+
+
+def test_reopening_a_window_brings_the_same_one_forward_with_fresh_results(app):
+    app.on_block_substitution()
+    first = app._tool_dialogs[app_module.BlockSubstitutionDialog]
+    app.draft.threading[0] = -1
+    app.on_block_substitution()
+    assert app._tool_dialogs[app_module.BlockSubstitutionDialog] is first
+    assert "unthreaded" in dialog_text(first)
+    first.close()
+    app.on_block_substitution()
+    assert app._tool_dialogs[app_module.BlockSubstitutionDialog] is not first
+
+
+# -- combining drafts --
+
+def test_combining_with_a_preset_previews_and_applies(app):
+    app.on_combine()
+    dialog = app._tool_dialogs[app_module.CombineDialog]
+    assert dialog_text(dialog).startswith("Result: 32 ends x 32 picks, 6 shafts, 6 treadles")    # twill + plain
+    dialog.mode_var.set("double")
+    depth = undo_depth(app)
+    assert dialog.apply()
+    d = app.draft
+    assert (d.ends, d.picks, d.shafts, d.treadles) == (32, 32, 6, 6) and undo_depth(app) == depth + 1
+    assert d.drawdown()[1::2, 0::2].all()                        # a double cloth: the top layer is lifted out of the way
+    assert "Drafts combined" in app.status.cget("text")
+
+
+def test_combining_the_draft_with_a_copy_of_itself_doubles_the_loom(app):
+    app.on_combine()
+    dialog = app._tool_dialogs[app_module.CombineDialog]
+    dialog.source_var.set("current")
+    assert dialog_text(dialog).startswith("Result: 32 ends x 32 picks, 8 shafts, 8 treadles")
+
+
+def test_combining_with_a_wif_file_and_its_mistakes(app, tmp_path):
+    from weavegen.core.draft import Draft
+    from weavegen.io import wif
+    app.on_combine()
+    dialog = app._tool_dialogs[app_module.CombineDialog]
+    dialog.source_var.set("wif")
+    assert "Choose a WIF file" in dialog_text(dialog)
+    dialog.path_var.set(str(tmp_path / "missing.wif"))
+    assert str(dialog.apply_button.cget("state")) == "disabled" and dialog_text(dialog)
+    junk = tmp_path / "junk.wif"
+    junk.write_text("nothing useful", encoding="utf-8")
+    dialog.path_var.set(str(junk))
+    assert "Could not read that WIF file" in dialog_text(dialog)
+    good = tmp_path / "good.wif"
+    wif.save(Draft.twill_2_2(ends=8, picks=8), good)
+    dialog.path_var.set(str(good))
+    assert dialog_text(dialog).startswith("Result: 32 ends x 32 picks, 8 shafts, 8 treadles")   # B is repeated to 16
+    sinking = tmp_path / "sinking.wif"
+    wif.save(Draft(rising=False), sinking)
+    dialog.path_var.set(str(sinking))
+    assert "same shed" in dialog_text(dialog)
+
+
+def test_the_browse_button_chooses_the_file(app, tmp_path, monkeypatch):
+    app.on_combine()
+    dialog = app._tool_dialogs[app_module.CombineDialog]
+    monkeypatch.setattr(app_module.filedialog, "askopenfilename", lambda **k: "")
+    dialog.browse()
+    assert dialog.path_var.get() == "" and dialog.source_var.get() == "preset"
+    import weavegen.ui.dialogs as dialogs_module
+    monkeypatch.setattr(dialogs_module.filedialog, "askopenfilename", lambda **k: str(tmp_path / "x.wif"))
+    dialog.browse()
+    assert dialog.path_var.get().endswith("x.wif") and dialog.source_var.get() == "wif"
+
+
+# -- network drafting --
+
+def test_network_drafting_defaults_to_an_initial_of_four_and_previews(app):
+    app.draft.resize(shafts=8, treadles=8)
+    app.on_network()
+    dialog = app._tool_dialogs[app_module.NetworkDialog]
+    assert dialog.initial_var.get() == "4"
+    assert dialog_text(dialog).startswith("Result: 16 ends x 16 picks, 8 shafts, 8 treadles")
+    assert dialog.lines["thread"].points.get() and dialog.lines["tread"].points.get() == "1"     # level treadling
+
+
+def test_applying_a_network_threads_on_the_network_and_is_one_undo_step(app):
+    app.draft.resize(shafts=8, treadles=8)
+    before = app.draft.snapshot()
+    depth = undo_depth(app)
+    app.on_network()
+    dialog = app._tool_dialogs[app_module.NetworkDialog]
+    assert dialog.apply()
+    d = app.draft
+    assert (d.threading % 4 == np.arange(16) % 4).all() and d.treadling.sum(axis=1).tolist() == [1] * 16
+    assert undo_depth(app) == depth + 1 and "Network applied" in app.status.cget("text")
+    app.on_undo()
+    assert (app.draft.threading == before.threading).all() and (app.draft.treadling == before.treadling).all()
+
+
+def test_changing_the_design_line_shape_rewrites_its_control_points(app):
+    app.draft.resize(shafts=8, treadles=8)
+    app.on_network()
+    dialog = app._tool_dialogs[app_module.NetworkDialog]
+    line = dialog.lines["thread"]
+    line.kind.set(dialog.KIND_NAMES["point"])
+    line.cycles.set("2")
+    dialog.preset("thread")
+    assert line.points.get() == "1 8 1 8 1"
+    line.points.set("1 5 3")
+    assert dialog_text(dialog).startswith("Result:")                 # typing points is honoured
+    line.points.set("1 five")
+    assert "'five' is not a number" in dialog_text(dialog) and str(dialog.apply_button.cget("state")) == "disabled"
+
+
+def test_a_network_needs_shafts_and_treadles_that_fit_the_initial(app):
+    app.on_network()                                                # 4 shafts and 4 treadles: fine
+    dialog = app._tool_dialogs[app_module.NetworkDialog]
+    dialog.initial_var.set("3")
+    assert "multiple of the initial" in dialog_text(dialog)
+    dialog.initial_var.set("x")
+    assert "whole number" in dialog_text(dialog)
+    dialog.initial_var.set("4")
+    assert dialog_text(dialog).startswith("Result:")
+
+
+def test_network_drafting_is_refused_in_liftplan_mode(app):
+    app.draft.set_liftplan_mode(True)
+    app.on_network()
+    assert "liftplan" in dialog_text(app._tool_dialogs[app_module.NetworkDialog])
+
+
+# -- reduce to fewest shafts and treadles --
+
+def test_reduce_removes_shafts_and_treadles_the_cloth_does_not_need(app):
+    app.draft.resize(shafts=8, treadles=8)
+    cloth = app.draft.drawdown().copy()
+    depth = undo_depth(app)
+    assert app.reduce_draft()
+    assert (app.draft.shafts, app.draft.treadles) == (4, 4) and (app.draft.drawdown() == cloth).all()
+    assert undo_depth(app) == depth + 1 and "Reduced to 4 shafts and 4 treadles (was 8 and 8)" in app.status.cget("text")
+    assert app.size_vars["shafts"].get() == "4"
+    app.on_undo()
+    assert app.draft.shafts == 8
+
+
+def test_reduce_on_a_minimal_draft_changes_nothing(app):
+    depth = undo_depth(app)
+    before = app.draft.snapshot()
+    assert app.reduce_draft()
+    assert undo_depth(app) == depth and (app.draft.threading == before.threading).all()
+    assert "already uses as few" in app.status.cget("text")
+
+
+def test_reduce_keeps_a_liftplan_draft_in_liftplan_mode(app):
+    app.draft.resize(shafts=8)
+    app.draft.set_liftplan_mode(True)
+    assert app.reduce_draft()
+    assert app.draft.liftplan_mode and app.draft.shafts == 4 and "Reduced to 4 shafts (was 8)" in app.status.cget("text")
+
+
+# -- importing a picture of a drawdown --
+
+def drawdown_picture(tmp_path, draft, name="cloth.png"):
+    from PIL import Image
+    picture = np.where(draft.drawdown()[:, ::-1], 0, 255).astype(np.uint8)
+    path = tmp_path / name
+    Image.fromarray(picture, "L").save(path)
+    return path
+
+
+def test_importing_a_drawdown_picture_makes_the_smallest_draft_for_it(app, tmp_path):
+    from weavegen.core import patterns
+    target = patterns.build_preset("satin_5", 20, 20)
+    path = drawdown_picture(tmp_path, target)
+    app.add_color("#336699")
+    palette, depth = list(app.draft.palette), undo_depth(app)
+    assert app.import_image(str(path))
+    d = app.draft
+    assert (d.ends, d.picks, d.shafts, d.treadles) == (20, 20, 5, 5) and (d.drawdown() == target.drawdown()).all()
+    assert d.palette == palette and undo_depth(app) == depth + 1
+    assert "Imported cloth.png" in app.status.cget("text") and app.size_vars["ends"].get() == "20"
+    app.on_undo()
+    assert app.draft.shafts == 4 and app.draft.ends == 16
+
+
+def test_importing_keeps_the_current_shed(app, tmp_path):
+    app.draft.set_rising(False)
+    path = drawdown_picture(tmp_path, app.draft)
+    app.import_image(str(path))
+    assert app.draft.rising is False
+
+
+def test_a_picture_that_cannot_be_used_is_reported_and_changes_nothing(app, tmp_path):
+    from PIL import Image
+    depth = undo_depth(app)
+    junk = tmp_path / "junk.png"
+    junk.write_bytes(b"not an image")
+    assert not app.import_image(str(junk)) and "junk.png is not an image" in app.errors[-1]
+    huge = tmp_path / "huge.png"
+    Image.new("L", (401, 5), 255).save(huge)
+    assert not app.import_image(str(huge)) and "at most 400 x 400" in app.errors[-1]
+    noisy = tmp_path / "noisy.png"
+    Image.fromarray(np.eye(40, dtype=np.uint8) * 255, "L").save(noisy)
+    assert not app.import_image(str(noisy)) and "needs" in app.errors[-1] and "shafts" in app.errors[-1]
+    assert not app.import_image(str(tmp_path / "gone.png")) and "gone.png" in app.errors[-1]
+    assert undo_depth(app) == depth and app.draft.ends == 16
+
+
+def test_the_import_command_uses_the_file_dialog_and_ignores_cancel(app, tmp_path, monkeypatch):
+    path = drawdown_picture(tmp_path, app.draft)
+    monkeypatch.setattr(app_module.filedialog, "askopenfilename", lambda **k: "")
+    app.on_import_image()
+    assert undo_depth(app) == 0
+    monkeypatch.setattr(app_module.filedialog, "askopenfilename", lambda **k: str(path))
+    app.on_import_image()
+    assert undo_depth(app) == 1

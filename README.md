@@ -109,6 +109,26 @@ Choose a tool in the **Tool** row:
 
 Every command is a single undo step, and invalid requests (such as a 4/4 twill on 4 shafts) show a message and change nothing. The tie-up and treadling commands are unavailable in liftplan mode, where those panels are hidden.
 
+#### Advanced drafting
+
+These open a window with the options, a live **Result** line (green when the draft can be made, red with the reason when it cannot) and an **Apply** button. Applying replaces the whole draft as one undo step, so Ctrl+Z brings the old one back. Opening the window again reuses it.
+
+- **Block substitution...**: the current draft is the *profile*. Each shaft in its threading stands for a block, and each treadle in its treadling stands for a block. Every profile end and pick is replaced by that block's unit from a structure, and the profile's own tie-up is replaced by the structure's. **Summer and winter** is built in (choose 1 to 15 blocks; the default is the highest block your profile uses), or choose **Custom** and edit the structure text yourself:
+
+  ```text
+  shafts 6
+  treadles 10
+  tieup 1 = 1, 3
+  tieup 10 = 3, 4, 5, 6
+  block 1 threading = 1 3 2 3
+  block 1 treadling = 1 9 2 10
+  ```
+
+  Numbers start at 1. `tieup 3 = 1, 4` ties treadle 3 to shafts 1 and 4. A threading unit lists the shafts that replace each end on that block's shaft; a treadling unit lists the treadles that replace each pick on that block's treadle, one pick each. Unthreaded ends and blank picks in the profile are dropped (the Result line says so). A profile pick with more than one treadle cannot be substituted. Thread colours carry over to every end and pick that replaces them.
+- **Combine drafts...**: joins this draft with a second one (a preset, a WIF file, or a copy of the current draft). **Interleave** alternates ends and picks of the two drafts, the second one's shafts above the first's; the shorter is repeated to match, and both must have the same shed. **Double weave** weaves the first as the top layer and the second as the bottom: with a rising shed, the second's treadles also lift every shaft of the first; with a sinking shed, the first's treadles also lower every shaft of the second. Palettes are merged. If the result needs more than 32 treadles, or either draft is a liftplan, the result is a liftplan. The drawdown of a double weave shows the shed (what is lifted), not the face of either layer.
+- **Network drafting...**: Alice Schlein's method of making a threading and treadling from a *design line* on top of an ordinary twill. Choose the **initial** `k` (for example 4 for a 4-shaft twill): end `e` may only use shafts `s` where `s` and `e` leave the same remainder when divided by `k`. A design line, a list of control points joined by straight lines and repeated across the draft, chooses which one of those shafts each end uses; its numbers are the bottom shaft of a `k`-high ribbon that slides over the shafts. Do the same for the treadling (one treadle per pick). Presets are **level**, **straight**, **point** and **wave**. The tie-up is left alone: with a tie-up that repeats every `k` shafts (such as the twill tie-up in the preset), the cloth keeps the structure of the initial twill whatever the design line, so only the line of the weave changes. The shafts and treadles must both be multiples of the initial. Not available in liftplan mode.
+- **Reduce to fewest shafts and treadles**: renumbers the shafts and treadles so the draft uses as few as its cloth needs, keeping the cloth the same. Ends with identical columns share a shaft and picks with identical rows share a treadle.
+
 ### Colours and cloth
 
 - The **Colours** row holds your palette. Click a swatch to select it; **Add**, **Edit** and **Remove** change the palette (Edit recolours every thread that uses the colour, Remove reassigns threads to a neighbouring colour; at least one colour always stays). There is no limit on the number of colours.
@@ -122,6 +142,7 @@ Every command is a single undo step, and invalid requests (such as a 4/4 twill o
 
 - **Open WIF... / Save / Save as WIF...** (Ctrl+O, Ctrl+S): WIF is a text format read and written by most weaving programs. It keeps the size, shed direction, threading, tie-up, treadling (or liftplan), palette and thread colours. Opening a file replaces the draft but is a single undo step, so Ctrl+Z brings your previous draft back. The window title shows the open file and Save writes back to it.
 - **Export PNG / SVG / PDF**: PNG follows the current view (Drawdown or Cloth). SVG and PDF are vector graphics that stay sharp at any size; they always show the flat colour drawdown. The PDF is a single page whose orientation is chosen so the draft prints as large as possible; choose **PDF page size** (A4 or US Letter) first.
+- **Import drawdown from image...**: works out a draft from a picture of a drawdown, one pixel per cell (dark pixel = warp up; the left column is the last end; transparent counts as white; images larger than 400 x 400 are refused). Ends with identical columns share a shaft, and picks with identical rows share a treadle; more than 32 different picks gives a liftplan, and more than 32 different ends is an error. Your palette and shed direction are kept. It replaces the draft in one undo step.
 - **Print...**: makes a printable PDF and opens it in your PDF viewer, which has the Print command and printer choice. Nothing is sent to a printer directly.
 
 Things to know about WIF: this program allows one shaft per end, so if a file threads an end on several shafts only the lowest is kept and you are warned. Colours, notes, spacing and other extras that WIF can hold but this program has no use for are ignored. In liftplan mode the liftplan is saved instead of the hidden tie-up and treadling. Files that cannot be used (not a WIF, more than 400 ends or picks, more than 32 shafts or treadles, numbers outside the declared size) are reported and leave your draft unchanged.
@@ -165,14 +186,20 @@ weavegen/
     yardage.py         yardage sums and report text
     ops.py             copy/cut/paste, flip, rotate, repeat, wrap, invert, lines
     patterns.py        sequence generators, tie-up generators, preset drafts, colour stripes
+    blocks.py          block structures (summer and winter, text format) and block substitution
+    combine.py         interleaving and double weave of two drafts
+    fabric.py          draft from a drawdown, and reduction to the fewest shafts and treadles
+    network.py         network drafting: design lines and networked threading/treadling
   io/
     wif.py             WIF reader and writer
     png.py             whole-draft PNG export via Pillow
     scene.py           vector description of the draft (rectangles, lines, labels) shared by SVG and PDF
     svg.py             SVG export
     pdf.py             PDF export (written directly, no extra library) and page placement
+    drawdown_image.py  drawdown from an image file
   ui/
     app.py             Tkinter window, canvas, tools, menus, mouse and toolbar handlers
+    dialogs.py         the block substitution, combine and network drafting windows
     yardage_dialog.py  the yardage calculator window
 tests/                 pytest suite: core logic, export, and UI driven with synthetic events
                        (UI tests skip themselves when no display is available)
@@ -210,7 +237,8 @@ python -m weavegen
 
 ## Notes & Limitations
 
-- Not yet implemented: a curve tool, network drafting, block substitution and double weave.
+- Not yet implemented: a curve tool.
+- Block substitution, combining and network drafting work on the draft in the editor and replace it; drafts are limited to 400 ends and 400 picks and 32 shafts and treadles, so large results are refused with a message. Summer and winter is the only built-in block structure.
 - The float finder looks at the draft as drawn: it does not see floats that would form where the draft repeats. Yardage ignores the selvedge and does not convert to yarn weight.
 - Each end is threaded on at most one shaft.
 - Behavior is tested primarily on **Windows** with Python 3.12. Mouse-wheel scrolling uses the Windows event model.
