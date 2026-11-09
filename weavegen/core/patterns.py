@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from typing import Callable
 
@@ -79,6 +80,52 @@ def apply_sequence(draft: Draft, target: str, kind: str, **params: int) -> bool:
             after[pick, treadle] = True
         return draft.set_matrix("treadling", after)
     raise ValueError("target must be 'threading' or 'treadling'")
+
+
+# ---- thread colour stripes ----
+
+_STRIPE = re.compile(r"^(\d+)\s*[:xX*]\s*(\d+)$")
+
+
+def parse_stripes(text: str, palette_size: int) -> list[tuple[int, int]]:
+    """Parse a stripe spec such as ``"1:4, 2:2"`` into ``[(colour_index, count), ...]``.
+
+    Colours are numbered from 1 as the user sees them (``1`` is the first palette colour) and
+    the result is 0-based. Entries are separated by commas, semicolons or spaces, and each is
+    ``colour:count`` (``x`` or ``*`` also work in place of ``:``).
+    """
+    entries = [e for e in re.split(r"[,;]+|\s+(?=\d+\s*[:xX*])", text.strip()) if e.strip()]
+    if not entries:
+        raise ValueError("enter at least one stripe, like 1:4, 2:2")
+    stripes = []
+    for entry in entries:
+        match = _STRIPE.match(entry.strip())
+        if not match:
+            raise ValueError(f"can't read {entry.strip()!r}: write each stripe as colour:count, like 2:4")
+        color, count = int(match.group(1)), int(match.group(2))
+        if not 1 <= color <= palette_size:
+            raise ValueError(f"colour {color} is not in the palette (1 to {palette_size})")
+        if count < 1:
+            raise ValueError("each stripe needs at least 1 thread")
+        stripes.append((color - 1, count))
+    return stripes
+
+
+def apply_stripes(draft: Draft, target: str, stripes: list[tuple[int, int]]) -> bool:
+    """Colour all the warp ends or weft picks with a repeating stripe sequence.
+    Returns True if any colour changed."""
+    if target not in ("warp", "weft"):
+        raise ValueError("target must be 'warp' or 'weft'")
+    if not stripes:
+        raise ValueError("no stripes given")
+    sequence: list[int] = []
+    for color, count in stripes:
+        sequence.extend([color] * count)
+    size = draft.ends if target == "warp" else draft.picks
+    repeated = (sequence * (size // len(sequence) + 1))[:size]
+    matrix = draft.matrix(target)
+    matrix[:, 0] = repeated
+    return draft.set_matrix(target, matrix)
 
 
 # ---- tie-ups ----

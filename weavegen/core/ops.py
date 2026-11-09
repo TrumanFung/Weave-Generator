@@ -12,14 +12,14 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from weavegen.core.draft import Draft
+from weavegen.core.draft import COLOR_PANELS, Draft
 from weavegen.core.selection import Rect
 
 
 @dataclass(frozen=True)
 class Clipboard:
     panel: str
-    data: np.ndarray  # 2-D bool, in the panel's matrix orientation
+    data: np.ndarray  # 2-D in the panel's matrix orientation: bool, or palette indices for colour strips
 
 
 def _checked(draft: Draft, panel: str, rect: Rect) -> np.ndarray:
@@ -35,8 +35,9 @@ def copy(draft: Draft, panel: str, rect: Rect) -> Clipboard:
 
 
 def clear(draft: Draft, panel: str, rect: Rect) -> bool:
+    """Empty the selected cells; in a colour strip they return to the default thread colour."""
     matrix = _checked(draft, panel, rect)
-    matrix[rect.rows, rect.cols] = False
+    matrix[rect.rows, rect.cols] = draft.clear_value(panel)
     return draft.set_matrix(panel, matrix)
 
 
@@ -74,6 +75,8 @@ def rotate(draft: Draft, panel: str, rect: Rect, turns: int = 1) -> bool:
     """Rotate a square selection by ``turns`` quarter turns (anticlockwise in matrix orientation)."""
     if panel == "threading":
         raise ValueError("the threading cannot be rotated: each end sits on one shaft")
+    if panel in COLOR_PANELS:
+        raise ValueError("colour strips cannot be rotated")
     if rect.height != rect.width:
         raise ValueError("only a square selection can be rotated")
     matrix = _checked(draft, panel, rect)
@@ -105,6 +108,8 @@ def invert(draft: Draft, panel: str, rect: Rect | None = None) -> bool:
     """Flip every cell in the selection (or the whole panel) between set and empty."""
     if panel == "threading":
         raise ValueError("the threading cannot be inverted: each end sits on one shaft")
+    if panel in COLOR_PANELS:
+        raise ValueError("colour strips cannot be inverted")
     matrix = draft.matrix(panel)
     if rect is None:
         rect = Rect(0, matrix.shape[0] - 1, 0, matrix.shape[1] - 1)
@@ -136,11 +141,12 @@ def line_cells(start: tuple[int, int], end: tuple[int, int]) -> list[tuple[int, 
 
 
 def draw_line(draft: Draft, panel: str, start: tuple[int, int], end: tuple[int, int],
-              paint: bool) -> bool:
+              paint: bool, value: int = 1) -> bool:
     """Set (``paint``) or clear the cells on a straight line from ``start`` to ``end``.
 
     In the threading the line runs end by end: each end it crosses is threaded on the shaft the
-    line passes through there (or unthreaded when clearing).
+    line passes through there (or unthreaded when clearing). In a colour strip ``value`` is the
+    palette index to paint; clearing returns cells to the default thread colour.
     """
     matrix = draft.matrix(panel)
     rows, cols = matrix.shape
@@ -160,6 +166,7 @@ def draw_line(draft: Draft, panel: str, start: tuple[int, int], end: tuple[int, 
             if paint:
                 matrix[end_index, shaft] = True
     else:
+        fill = value if paint else draft.clear_value(panel)
         for r, c in line_cells(start, end):
-            matrix[r, c] = paint
+            matrix[r, c] = fill
     return draft.set_matrix(panel, matrix)

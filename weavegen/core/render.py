@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from weavegen.core.colors import hex_to_rgb, palette_rgb  # noqa: F401  (hex_to_rgb re-exported)
 from weavegen.core.draft import Draft
 
 INK = (0, 0, 0)
@@ -15,15 +16,9 @@ PAPER = (255, 255, 255)
 LINE = (190, 190, 190)
 
 
-def hex_to_rgb(color: str) -> tuple[int, int, int]:
-    color = color.lstrip("#")
-    if len(color) != 6:
-        raise ValueError(f"expected a #rrggbb color, got {color!r}")
-    return int(color[0:2], 16), int(color[2:4], 16), int(color[4:6], 16)
-
-
 def display_arrays(draft: Draft) -> dict[str, np.ndarray]:
-    """Each visible panel as a (rows, cols) bool array in display orientation.
+    """Each visible bool panel (everything but the colours) as a (rows, cols) array in display
+    orientation, with the drawdown as warp-on-top = True.
 
     In liftplan mode the tie-up is hidden (as in the layout) and the liftplan replaces the treadling.
     """
@@ -40,12 +35,9 @@ def display_arrays(draft: Draft) -> dict[str, np.ndarray]:
     return arrays
 
 
-def panel_rgb(states: np.ndarray, cell: int,
-              on: tuple[int, int, int], off: tuple[int, int, int],
-              line: tuple[int, int, int] = LINE) -> np.ndarray:
-    """Scale a bool array up to ``cell`` px per cell, with grid lines when cells are big enough."""
-    # Colour the small per-cell array first, then scale it up: far cheaper than colouring pixels.
-    small = np.where(states[..., None], np.array(on, dtype=np.uint8), np.array(off, dtype=np.uint8))
+def scale_cells(small: np.ndarray, cell: int, line: tuple[int, int, int] = LINE) -> np.ndarray:
+    """Scale a (rows, cols, 3) colour array up to ``cell`` px per cell, adding grid lines when
+    cells are big enough to show them."""
     out = small.repeat(cell, axis=0).repeat(cell, axis=1)
     if cell >= 4:
         out[::cell, :] = line
@@ -55,13 +47,51 @@ def panel_rgb(states: np.ndarray, cell: int,
     return out
 
 
-def render_panels(draft: Draft, cell: int, warp_color: str, weft_color: str) -> dict[str, np.ndarray]:
-    """RGB array per panel. In the drawdown, warp-on-top cells use ``warp_color``."""
-    warp, weft = hex_to_rgb(warp_color), hex_to_rgb(weft_color)
-    out = {}
+def panel_rgb(states: np.ndarray, cell: int,
+              on: tuple[int, int, int], off: tuple[int, int, int],
+              line: tuple[int, int, int] = LINE) -> np.ndarray:
+    """Scale a bool array up to ``cell`` px per cell, coloured ``on`` / ``off``."""
+    # Colour the small per-cell array first, then scale it up: far cheaper than colouring pixels.
+    small = np.where(states[..., None], np.array(on, dtype=np.uint8), np.array(off, dtype=np.uint8))
+    return scale_cells(small, cell, line)
+
+
+def drawdown_colors(draft: Draft) -> np.ndarray:
+    """The drawdown as a (picks, ends, 3) colour array in display orientation. Where a warp end
+    is on top the cell takes that end's colour; otherwise it takes the pick's weft colour."""
+    palette = palette_rgb(draft)
+    warp = palette[draft.warp_colors]   # (ends, 3)
+    weft = palette[draft.weft_colors]   # (picks, 3)
+    up = draft.drawdown()
+    small = np.where(up[..., None], warp[None, :, :], weft[:, None, :])
+    return small[:, ::-1]
+
+
+def warp_strip(draft: Draft) -> np.ndarray:
+    """The warp colours as a (1, ends, 3) array, end 1 at the right."""
+    return palette_rgb(draft)[draft.warp_colors][None, ::-1, :]
+
+
+def weft_strip(draft: Draft) -> np.ndarray:
+    """The weft colours as a (picks, 1, 3) array, pick 1 at the top."""
+    return palette_rgb(draft)[draft.weft_colors][:, None, :]
+
+
+def render_panels(draft: Draft, cell: int, cloth_thickness: float | None = None) -> dict[str, np.ndarray]:
+    """RGB array per visible panel, including the warp and weft colour strips.
+
+    The drawdown shows each thread in its own colour. With ``cloth_thickness`` (0 to 1) it is
+    drawn as woven yarn instead of flat squares, see ``weavegen.core.cloth``.
+    """
+    panels = {}
     for name, states in display_arrays(draft).items():
-        if name == "drawdown":
-            out[name] = panel_rgb(states, cell, on=warp, off=weft)
-        else:
-            out[name] = panel_rgb(states, cell, on=INK, off=PAPER)
-    return out
+        if name != "drawdown":
+            panels[name] = panel_rgb(states, cell, INK, PAPER)
+    if cloth_thickness is None:
+        panels["drawdown"] = scale_cells(drawdown_colors(draft), cell)
+    else:
+        from weavegen.core.cloth import render_cloth
+        panels["drawdown"] = render_cloth(draft, cell, cloth_thickness)
+    panels["warp"] = scale_cells(warp_strip(draft), cell)
+    panels["weft"] = scale_cells(weft_strip(draft), cell)
+    return panels

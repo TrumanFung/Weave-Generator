@@ -30,7 +30,7 @@ def test_liftplan_mode_hides_the_tieup_and_swaps_treadling_for_liftplan():
     d = Draft(ends=3, picks=2, shafts=2, treadles=2)
     d.set_liftplan_mode(True)
     assert set(display_arrays(d)) == {"threading", "liftplan", "drawdown"}
-    assert set(render_panels(d, 6, "#000000", "#ffffff")) == {"threading", "liftplan", "drawdown"}
+    assert set(render_panels(d, 6)) == {"threading", "liftplan", "drawdown", "warp", "weft"}
 
 
 def test_drawdown_is_mirrored_so_end_one_is_at_the_right():
@@ -60,9 +60,10 @@ def test_tiny_cells_skip_grid_lines():
 def test_render_panels_sizes_match_the_layout():
     d = Draft.twill_2_2(ends=12, picks=9)
     lay = DraftLayout.build(d, cell=10)
-    panels = render_panels(d, 10, "#000000", "#ffffff")
+    panels = render_panels(d, 10)
     for name, grid in (("threading", lay.threading), ("tieup", lay.tieup),
-                       ("treadling", lay.treadling), ("drawdown", lay.drawdown)):
+                       ("treadling", lay.treadling), ("drawdown", lay.drawdown),
+                       ("warp", lay.warp), ("weft", lay.weft)):
         assert panels[name].shape[:2] == (grid.height, grid.width), name
 
 
@@ -71,14 +72,18 @@ def test_drawdown_uses_warp_and_weft_colors():
     d.set_thread(0, 0)
     d.set_tieup(0, 0, True)
     d.set_treadling(0, 0, True)           # end 1 up, end 2 (unthreaded) down
-    img = render_panels(d, 6, "#ff0000", "#0000ff")["drawdown"]
+    d.set_palette_color(0, "#ff0000")     # warp colour
+    d.set_palette_color(1, "#0000ff")     # weft colour
+    img = render_panels(d, 6)["drawdown"]
     assert tuple(img[3, 9]) == (255, 0, 0)   # end 1 is the right-hand column: warp color
     assert tuple(img[3, 3]) == (0, 0, 255)   # end 2 on the left: weft color
 
 
 def test_png_export_matches_layout_and_contains_the_drawdown_colors():
     d = Draft.twill_2_2(ends=12, picks=12)
-    img = render_draft_image(d, "#ff0000", "#0000ff", cell=10)
+    d.set_palette_color(0, "#ff0000")
+    d.set_palette_color(1, "#0000ff")
+    img = render_draft_image(d, cell=10)
     lay = DraftLayout.build(d, 10)
     assert img.size == (int(lay.width), int(lay.height))
     colors = {c for _, c in img.getcolors(maxcolors=100000)}

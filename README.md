@@ -3,8 +3,9 @@
 Weave Generator is a **Python desktop application** (Tkinter) for designing handweaving drafts. You edit the **threading**, **tie-up** and **treadling** (or a direct **liftplan**), and the **drawdown** is computed from them, the same model used by professional weaving software such as [WeaveIt](https://www.weaveit.com/).
 
 ```text
- [ threading ]  [ tie-up    ]
- [ drawdown  ]  [ treadling ]
+ [ warp colours ]
+ [ threading    ]  [ tie-up    ]
+ [ drawdown     ]  [ treadling ]  [ weft colours ]
 ```
 
 You can:
@@ -16,8 +17,11 @@ You can:
 - **Generate** threadings and treadlings (straight, point, advancing, skip) and tie-ups (plain, twill, satin), or start from a **preset** (plain weave, twills, herringbone, diamond, satins)
 - **Undo / redo** every edit (Ctrl+Z, Ctrl+Y)
 - **Zoom** and scroll large drafts
-- Pick **warp** and **weft** colors
-- **Export** the whole draft (all four panels with numbered rulers) as a PNG
+- Colour every **warp end** and **weft pick** from an unlimited **palette**, with repeating **stripe** sequences
+- Switch the drawdown to a shaded **cloth view** that shows the yarns and their colours
+- **Open and save WIF** files, the interchange format of weaving software, to share drafts with other programs
+- **Export** the whole draft (all panels with numbered rulers) as a PNG (as drawn in the current view), or as a vector **SVG** or **PDF**
+- **Print** the draft on A4 or US Letter paper
 
 ---
 
@@ -82,7 +86,7 @@ A whole press-drag-release is a single undo step.
 
 Choose a tool in the **Tool** row:
 
-- **Pencil**: click or drag to set or clear cells (the behavior above).
+- **Pencil**: click or drag to set or clear cells (the behavior above). In a colour strip it paints the selected colour. Fast drags are filled in so no cells are skipped.
 - **Line**: drag to draw a straight line. Starting on a set cell erases the line instead. In the threading the line threads each end it crosses on the shaft it passes through.
 - **Select**: drag a rectangle inside one panel; it shows as a dashed outline. Clicking a single cell selects just that cell, which is also how you choose where to paste.
 
@@ -104,6 +108,23 @@ Choose a tool in the **Tool** row:
 
 Every command is a single undo step, and invalid requests (such as a 4/4 twill on 4 shafts) show a message and change nothing. The tie-up and treadling commands are unavailable in liftplan mode, where those panels are hidden.
 
+### Colours and cloth
+
+- The **Colours** row holds your palette. Click a swatch to select it; **Add**, **Edit** and **Remove** change the palette (Edit recolours every thread that uses the colour, Remove reassigns threads to a neighbouring colour; at least one colour always stays). There is no limit on the number of colours.
+- The strip above the threading colours the **warp ends**, and the strip to the right of the treadling colours the **weft picks**. Paint them with the pencil or line tool, and use Select, Copy, Paste, Flip, Repeat, Wrap and Delete on them like any other panel. Delete restores the default thread colour.
+- **Draft > Colour stripes** colours the whole warp or weft from a repeating sequence of `colour:threads` pairs, for example `1:4, 2:2` is four threads of colour 1 then two of colour 2 (colours are numbered on the swatches).
+- The **drawdown** shows each cell in the colour of the thread that is on top: the end's colour where the warp is up, the pick's colour where the weft is.
+- The **View** buttons (Drawdown / Cloth): **Cloth** draws rounded, shaded yarns with the lower thread shadowed where it passes under, so floats and colour effects look like woven cloth. **Yarn width %** sets how much of each cell the yarn fills (30 to 100). This is a display choice only: it is not an undo step and never changes the draft.
+- Presets and generators change the structure only; your palette and thread colours are kept.
+
+### File menu
+
+- **Open WIF... / Save / Save as WIF...** (Ctrl+O, Ctrl+S): WIF is a text format read and written by most weaving programs. It keeps the size, shed direction, threading, tie-up, treadling (or liftplan), palette and thread colours. Opening a file replaces the draft but is a single undo step, so Ctrl+Z brings your previous draft back. The window title shows the open file and Save writes back to it.
+- **Export PNG / SVG / PDF**: PNG follows the current view (Drawdown or Cloth). SVG and PDF are vector graphics that stay sharp at any size; they always show the flat colour drawdown. The PDF is a single page whose orientation is chosen so the draft prints as large as possible; choose **PDF page size** (A4 or US Letter) first.
+- **Print...**: makes a printable PDF and opens it in your PDF viewer, which has the Print command and printer choice. Nothing is sent to a printer directly.
+
+Things to know about WIF: this program allows one shaft per end, so if a file threads an end on several shafts only the lowest is kept and you are warned. Colours, notes, spacing and other extras that WIF can hold but this program has no use for are ignored. In liftplan mode the liftplan is saved instead of the hidden tie-up and treadling. Files that cannot be used (not a WIF, more than 400 ends or picks, more than 32 shafts or treadles, numbers outside the declared size) are reported and leave your draft unchanged.
+
 ### Toolbar
 
 - **Ends / Picks / Shafts / Treadles + Apply**: resize the draft, keeping everything that still fits. Ends threaded on a removed shaft become unthreaded.
@@ -111,8 +132,7 @@ Every command is a single undo step, and invalid requests (such as a 4/4 twill o
 - **Liftplan**: switches the tie-up and treadling for a direct liftplan. Switching it on converts your current treadling, so the cloth does not change.
 - **Undo / Redo / Clear**: clear blanks the threading, tie-up, treadling and liftplan.
 - **Zoom** (`-` / `+` or Ctrl + mouse wheel): very large drafts are drawn smaller than the zoom shown so they stay within a workable size.
-- **Warp / Weft**: the colors of warp-on-top and weft-on-top cells in the drawdown.
-- **Export PNG**: saves all panels, with rulers, as one image.
+- **Export PNG**: saves all panels, with rulers, as one image. It follows the current view, so Cloth gives a picture of the woven cloth.
 
 ---
 
@@ -122,15 +142,21 @@ Every command is a single undo step, and invalid requests (such as a 4/4 twill o
 weave_generator.py     launcher (kept for `python weave_generator.py` and PyInstaller)
 weavegen/
   core/                toolkit-independent logic (no Tkinter imports)
-    draft.py           Draft: threading, tie-up, treadling/liftplan, computed drawdown, resize
+    draft.py           Draft: threading, tie-up, treadling/liftplan, palette and thread colours, computed drawdown, resize
     history.py         History: undo/redo over draft snapshots
     layout.py          DraftLayout: four-panel geometry, hit-testing, ruler labels
-    render.py          draft -> RGB pixel arrays, one per panel
+    colors.py          palette helpers (hex -> RGB)
+    render.py          draft -> RGB pixel arrays, one per panel, colour-and-weave drawdown
+    cloth.py           shaded cloth-view renderer
     selection.py       Rect, and mapping between panel matrices and the screen
     ops.py             copy/cut/paste, flip, rotate, repeat, wrap, invert, lines
-    patterns.py        sequence generators, tie-up generators, preset drafts
+    patterns.py        sequence generators, tie-up generators, preset drafts, colour stripes
   io/
+    wif.py             WIF reader and writer
     png.py             whole-draft PNG export via Pillow
+    scene.py           vector description of the draft (rectangles, lines, labels) shared by SVG and PDF
+    svg.py             SVG export
+    pdf.py             PDF export (written directly, no extra library) and page placement
   ui/
     app.py             Tkinter window, canvas, tools, menus, mouse and toolbar handlers
 tests/                 pytest suite: core logic, export, and UI driven with synthetic events
@@ -169,7 +195,7 @@ python -m weavegen
 
 ## Notes & Limitations
 
-- Not yet implemented: a curve tool, network drafting, per-thread colors, WIF import/export, printing, float finder and yardage, block substitution and double weave.
+- Not yet implemented: a curve tool, network drafting, float finder and yardage, block substitution and double weave.
 - Each end is threaded on at most one shaft.
 - Behavior is tested primarily on **Windows** with Python 3.12. Mouse-wheel scrolling uses the Windows event model.
 
