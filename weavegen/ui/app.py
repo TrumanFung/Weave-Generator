@@ -16,7 +16,7 @@ from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
 
 from PIL import Image, ImageTk  # type: ignore
 
-from weavegen.core import analysis, ops, patterns
+from weavegen.core import analysis, fabric, ops, patterns
 from weavegen.core.draft import (
     COLOR_PANELS, MAX_ENDS, MAX_PICKS, MAX_SHAFTS, MAX_TREADLES, Draft, DraftState,
 )
@@ -25,9 +25,11 @@ from weavegen.core.layout import DraftLayout, Hit
 from weavegen.core.render import render_panels
 from weavegen.core.selection import Rect, display_axis, display_shift_to_matrix, matrix_to_display
 from weavegen.io import wif
+from weavegen.io.drawdown_image import drawdown_from_image
 from weavegen.io.pdf import PAGE_SIZES, save_pdf
 from weavegen.io.png import render_draft_image
 from weavegen.io.svg import save_svg
+from weavegen.ui.dialogs import BlockSubstitutionDialog, CombineDialog, NetworkDialog, ToolDialog
 from weavegen.ui.yardage_dialog import YardageDialog
 
 TOOLS = (("pencil", "Pencil"), ("line", "Line"), ("select", "Select"))
@@ -89,6 +91,7 @@ class WeaveGeneratorApp:
         self.float_limit = 3  # floats longer than this many threads are highlighted
         self.yardage_settings: dict[str, str] = {}  # the yardage window's entries, kept for the session
         self._yardage_dialog: YardageDialog | None = None
+        self._tool_dialogs: dict[type, ToolDialog] = {}  # the open block / combine / network windows
 
         self.selection: tuple[str, Rect] | None = None  # (panel, cells in matrix coordinates)
         self.clipboard: ops.Clipboard | None = None
@@ -208,6 +211,7 @@ class WeaveGeneratorApp:
         file_menu.add_command(label="Open WIF...", accelerator="Ctrl+O", command=self.on_open)
         file_menu.add_command(label="Save", accelerator="Ctrl+S", command=self.on_save)
         file_menu.add_command(label="Save as WIF...", command=self.on_save_as)
+        file_menu.add_command(label="Import drawdown from image...", command=self.on_import_image)
         file_menu.add_separator()
         file_menu.add_command(label="Export PNG...", command=self.on_export)
         file_menu.add_command(label="Export SVG...", command=self.on_export_svg)
@@ -265,6 +269,11 @@ class WeaveGeneratorApp:
         for key, preset in patterns.PRESETS.items():
             presets.add_command(label=preset.label, command=lambda k=key: self.apply_preset(k))
         draft.add_cascade(label="Replace with preset", menu=presets)
+        draft.add_separator()
+        draft.add_command(label="Block substitution...", command=self.on_block_substitution)
+        draft.add_command(label="Combine drafts...", command=self.on_combine)
+        draft.add_command(label="Network drafting...", command=self.on_network)
+        draft.add_command(label="Reduce to fewest shafts and treadles", command=self.on_reduce)
         bar.add_cascade(label="Draft", menu=draft)
 
         analysis_menu = tk.Menu(bar, tearoff=0)
@@ -795,6 +804,75 @@ class WeaveGeneratorApp:
         palette and thread colours."""
         self.draft.replace_structure(other)
         return True
+
+    def replace_draft(self, new: Draft, status: str) -> bool:
+        """Swap in a whole new draft (any size) as one undo step."""
+        state = new.snapshot()
+        self._edit(lambda: self.draft.restore(state) or True, relayout=True)
+        self._set_status(status)
+        return True
+
+    def _open_dialog(self, kind: type) -> ToolDialog:
+        """Open one of the Draft-menu windows, or bring the open one forward with fresh results."""
+        existing = self._tool_dialogs.get(kind)
+        if existing is not None and existing.window.winfo_exists():
+            existing.window.lift()
+            existing.refresh()
+            return existing
+        dialog = kind(self)
+        self._tool_dialogs[kind] = dialog
+        return dialog
+
+    def on_block_substitution(self) -> None:
+        self._open_dialog(BlockSubstitutionDialog)
+
+    def on_combine(self) -> None:
+        self._open_dialog(CombineDialog)
+
+    def on_network(self) -> None:
+        self._open_dialog(NetworkDialog)
+
+    def reduce_draft(self) -> bool:
+        """Renumber the shafts and treadles so the draft uses as few as its cloth needs."""
+        d = self.draft
+        try:
+            smaller = fabric.minimise(d)
+        except ValueError as exc:
+            self._error(str(exc))
+            return False
+        fewer_treadles = smaller.treadles < d.treadles and not d.liftplan_mode
+        if smaller.shafts >= d.shafts and not fewer_treadles:
+            self._set_status("The draft already uses as few shafts and treadles as its cloth needs.")
+            return True
+        if d.liftplan_mode:
+            note = f"Reduced to {smaller.shafts} shafts (was {d.shafts})."
+        else:
+            note = (f"Reduced to {smaller.shafts} shafts and {smaller.treadles} treadles "
+                    f"(was {d.shafts} and {d.treadles}).")
+        return self.replace_draft(smaller, note)
+
+    def on_reduce(self) -> None:
+        self.reduce_draft()
+
+    def import_image(self, path: str) -> bool:
+        """Replace the draft with one worked out from a picture of the drawdown (one pixel per cell)."""
+        try:
+            new = fabric.draft_from_drawdown(drawdown_from_image(path), rising=self.draft.rising)
+        except (ValueError, OSError) as exc:
+            self._error(f"Could not import {Path(path).name}.\n\n{exc}")
+            return False
+        new.palette = list(self.draft.palette)
+        new.weft_colors[:] = new.default_weft_color()
+        return self.replace_draft(
+            new, f"Imported {Path(path).name}: {new.ends} ends x {new.picks} picks needing "
+                 f"{new.shafts} shafts" + ("." if new.liftplan_mode else f" and {new.treadles} treadles."))
+
+    def on_import_image(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Import drawdown from image",
+            filetypes=[("Images", "*.png *.bmp *.gif *.jpg *.jpeg *.tif *.tiff"), ("All files", "*.*")])
+        if path:
+            self.import_image(path)
 
     def apply_preset(self, key: str) -> bool:
         """Replace the draft with a preset at the current number of ends and picks."""
