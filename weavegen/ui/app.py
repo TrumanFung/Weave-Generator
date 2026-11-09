@@ -16,7 +16,7 @@ from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
 
 from PIL import Image, ImageTk  # type: ignore
 
-from weavegen.core import ops, patterns
+from weavegen.core import analysis, ops, patterns
 from weavegen.core.draft import (
     COLOR_PANELS, MAX_ENDS, MAX_PICKS, MAX_SHAFTS, MAX_TREADLES, Draft, DraftState,
 )
@@ -28,6 +28,7 @@ from weavegen.io import wif
 from weavegen.io.pdf import PAGE_SIZES, save_pdf
 from weavegen.io.png import render_draft_image
 from weavegen.io.svg import save_svg
+from weavegen.ui.yardage_dialog import YardageDialog
 
 TOOLS = (("pencil", "Pencil"), ("line", "Line"), ("select", "Select"))
 
@@ -85,6 +86,9 @@ class WeaveGeneratorApp:
         self._palette_key: tuple | None = None
         self.zoom = self.ZOOM_DEFAULT
         self.file_path: str | None = None  # the WIF file the draft was last opened from or saved to
+        self.float_limit = 3  # floats longer than this many threads are highlighted
+        self.yardage_settings: dict[str, str] = {}  # the yardage window's entries, kept for the session
+        self._yardage_dialog: YardageDialog | None = None
 
         self.selection: tuple[str, Rect] | None = None  # (panel, cells in matrix coordinates)
         self.clipboard: ops.Clipboard | None = None
@@ -263,6 +267,22 @@ class WeaveGeneratorApp:
         draft.add_cascade(label="Replace with preset", menu=presets)
         bar.add_cascade(label="Draft", menu=draft)
 
+        analysis_menu = tk.Menu(bar, tearoff=0)
+        self.float_var = tk.BooleanVar(value=False)
+        self.float_side_var = tk.StringVar(value="both")
+        analysis_menu.add_checkbutton(label="Highlight long floats", variable=self.float_var,
+                                      command=self.on_toggle_floats)
+        analysis_menu.add_command(label="Float length limit...", command=self.on_float_limit)
+        sides = tk.Menu(analysis_menu, tearoff=0)
+        for value, label in (("both", "Face and back"), ("face", "Face only"), ("back", "Back only")):
+            sides.add_radiobutton(label=label, value=value, variable=self.float_side_var,
+                                  command=self._refresh_images)
+        analysis_menu.add_cascade(label="Floats to show", menu=sides)
+        analysis_menu.add_command(label="Float report...", command=self.on_float_report)
+        analysis_menu.add_separator()
+        analysis_menu.add_command(label="Yardage...", command=self.on_yardage)
+        bar.add_cascade(label="Analysis", menu=analysis_menu)
+
         self.root.config(menu=bar)
 
     def _bind_events(self) -> None:
@@ -322,11 +342,63 @@ class WeaveGeneratorApp:
 
     def _refresh_images(self) -> None:
         """Re-render the panel pixels only; the layout is unchanged."""
-        panels = render_panels(self.draft, self.layout.cell, self._cloth_thickness())
+        panels = render_panels(self.draft, self.layout.cell, self._cloth_thickness(),
+                               self._float_highlight())
         for name, pixels in panels.items():
             photo = ImageTk.PhotoImage(Image.fromarray(pixels))
             self._photos[name] = photo
             self.canvas.itemconfigure(self._image_items[name], image=photo)
+
+    # ---- analysis ----
+    def _float_sides(self) -> tuple[str, ...]:
+        side = self.float_side_var.get()
+        return analysis.SIDES if side == "both" else (side,)
+
+    def _float_highlight(self):
+        """The cells to shade as long floats, or None while the highlight is off."""
+        if not self.float_var.get():
+            return None
+        return analysis.float_mask(self.draft, self.float_limit, self._float_sides())
+
+    def on_toggle_floats(self) -> None:
+        self._refresh_images()
+        if self.float_var.get():
+            report = analysis.analyse_floats(self.draft, self.float_limit, self._float_sides())
+            count = len(report.floats)
+            self._set_status(f"{count} float{'s' if count != 1 else ''} longer than {self.float_limit} "
+                             "shown in red on the drawdown." if count else
+                             f"No floats longer than {self.float_limit}.")
+
+    def set_float_limit(self, limit: int) -> bool:
+        """Choose how many threads a float may cross before it is highlighted (1 to 400)."""
+        try:
+            analysis.float_mask(self.draft, limit)  # validates the number
+        except ValueError as exc:
+            self._error(str(exc))
+            return False
+        self.float_limit = int(limit)
+        self._refresh_images()
+        return True
+
+    def on_float_limit(self) -> None:
+        limit = simpledialog.askinteger(
+            "Float length limit", "Highlight floats longer than this many threads:",
+            parent=self.root, initialvalue=self.float_limit, minvalue=1, maxvalue=MAX_ENDS)
+        if limit is not None:
+            self.set_float_limit(limit)
+
+    def float_report(self) -> analysis.FloatReport:
+        return analysis.analyse_floats(self.draft, self.float_limit, self._float_sides())
+
+    def on_float_report(self) -> None:
+        messagebox.showinfo("Float report", analysis.describe(self.float_report()))
+
+    def on_yardage(self) -> None:
+        if self._yardage_dialog is not None and self._yardage_dialog.window.winfo_exists():
+            self._yardage_dialog.window.lift()
+            self._yardage_dialog.calculate()  # the draft's colours may have changed
+            return
+        self._yardage_dialog = YardageDialog(self)
 
     def _cloth_thickness(self) -> float | None:
         """The yarn width (0 to 1) when the cloth view is on, or None for the flat drawdown."""

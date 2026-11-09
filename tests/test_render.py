@@ -3,7 +3,9 @@ import pytest
 
 from weavegen.core.draft import Draft
 from weavegen.core.layout import DraftLayout
-from weavegen.core.render import display_arrays, hex_to_rgb, panel_rgb, render_panels
+from weavegen.core.render import (
+    FLOAT_TINT, display_arrays, hex_to_rgb, panel_rgb, render_panels, tint_cells,
+)
 from weavegen.io.png import render_draft_image
 
 
@@ -88,3 +90,59 @@ def test_png_export_matches_layout_and_contains_the_drawdown_colors():
     assert img.size == (int(lay.width), int(lay.height))
     colors = {c for _, c in img.getcolors(maxcolors=100000)}
     assert (255, 0, 0) in colors and (0, 0, 255) in colors
+
+
+# ---- float highlight ----
+
+def test_tint_cells_shades_only_the_masked_cells_and_keeps_grid_lines():
+    base = np.full((4 * 8, 4 * 8, 3), 200, dtype=np.uint8)
+    base[::8, :] = 100                                    # grid lines
+    base[:, ::8] = 100
+    mask = np.zeros((4, 4), dtype=bool)
+    mask[1, 2] = True
+    out = tint_cells(base, mask, 8)
+    cell = (slice(8, 16), slice(16, 24))
+    assert (out[8 + 3, 16 + 3] != 200).any()               # the inside of the masked cell is tinted
+    assert tuple(out[8, 16 + 3]) == (100, 100, 100)        # but its top grid line is not
+    other = np.ones((32, 32), dtype=bool)
+    other[cell] = False
+    assert (out[other] == base[other]).all()               # nothing else changed
+    assert (base == 200).sum() > 0 and base[8 + 3, 16 + 3, 0] == 200   # the input is not modified
+
+
+def test_tint_mixes_towards_the_tint_colour():
+    base = np.full((8, 8, 3), 255, dtype=np.uint8)
+    out = tint_cells(base, np.ones((2, 2), dtype=bool), 4, tint=(0, 0, 0), strength=0.5)
+    assert out[1, 1].tolist() == [127, 127, 127]
+
+
+def test_highlight_shades_the_drawdown_in_display_orientation_and_nothing_else():
+    d = Draft.twill_2_2()
+    mask = np.zeros((d.picks, d.ends), dtype=bool)
+    mask[0, 0] = True                                      # pick 1, end 1: the top-right cell on screen
+    plain, marked = render_panels(d, 8), render_panels(d, 8, highlight=mask)
+    changed = (plain["drawdown"] != marked["drawdown"]).any(axis=2)
+    assert changed[:8, -8:].any() and changed.sum() == changed[:8, -8:].sum()
+    for name in ("threading", "tieup", "treadling", "warp", "weft"):
+        assert (plain[name] == marked[name]).all()
+    before, after = (int(v) for v in plain["drawdown"][3, -4]), [int(v) for v in marked["drawdown"][3, -4]]
+    assert after != list(before) and after[0] > after[1]   # shaded, and towards red
+
+
+def test_highlight_works_over_the_cloth_view_and_none_changes_nothing():
+    d = Draft.twill_2_2()
+    mask = np.ones((d.picks, d.ends), dtype=bool)
+    plain = render_panels(d, 10, cloth_thickness=0.85)
+    assert (render_panels(d, 10, cloth_thickness=0.85, highlight=None)["drawdown"] == plain["drawdown"]).all()
+    assert (render_panels(d, 10, cloth_thickness=0.85, highlight=mask)["drawdown"] != plain["drawdown"]).any()
+
+
+def test_a_highlight_of_the_wrong_shape_is_refused():
+    d = Draft.twill_2_2()
+    with pytest.raises(ValueError, match="highlight must be"):
+        render_panels(d, 8, highlight=np.zeros((3, 3), dtype=bool))
+
+
+def test_the_tint_is_a_strong_red():
+    r, g, b = FLOAT_TINT
+    assert r > 200 and g < 60
