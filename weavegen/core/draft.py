@@ -17,6 +17,7 @@ shaft, so it stays down in a rising shed and up in a sinking shed.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 import numpy as np
@@ -27,6 +28,14 @@ MAX_ENDS = 400
 MAX_PICKS = 400
 
 UNTHREADED = -1
+
+# Thread colours are indices into the draft's palette. Warp ends start on colour 0 and weft
+# picks on colour 1, which reproduces the classic dark-warp / light-weft look.
+DEFAULT_PALETTE = ("#1f2937", "#f8fafc")
+
+COLOR_PANELS = ("warp", "weft")
+
+_HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
 @dataclass(frozen=True)
@@ -39,6 +48,15 @@ class DraftState:
     liftplan: np.ndarray
     rising: bool
     liftplan_mode: bool
+    palette: tuple[str, ...]
+    warp_colors: np.ndarray
+    weft_colors: np.ndarray
+
+
+def _check_color(color: str) -> str:
+    if not isinstance(color, str) or not _HEX_COLOR.match(color):
+        raise ValueError(f"colors must look like #rrggbb, got {color!r}")
+    return color.lower()
 
 
 def _check_range(name: str, value: int, low: int, high: int) -> None:
@@ -67,6 +85,9 @@ class Draft:
         self.liftplan = np.zeros((picks, shafts), dtype=bool)
         self.rising = rising
         self.liftplan_mode = False
+        self.palette: list[str] = list(DEFAULT_PALETTE)
+        self.warp_colors = np.zeros(ends, dtype=np.int32)
+        self.weft_colors = np.full(picks, self.default_weft_color(), dtype=np.int32)
 
     @classmethod
     def twill_2_2(cls, ends: int = 16, picks: int = 16) -> "Draft":
@@ -195,10 +216,61 @@ class Draft:
         self.tieup = _resized(self.tieup, (new_treadles, new_shafts), False)
         self.treadling = _resized(self.treadling, (new_picks, new_treadles), False)
         self.liftplan = _resized(self.liftplan, (new_picks, new_shafts), False)
+        self.warp_colors = _resized(self.warp_colors, (new_ends,), 0)
+        self.weft_colors = _resized(self.weft_colors, (new_picks,), self.default_weft_color())
+        return True
+
+    # ---- thread colours ----
+    def default_weft_color(self) -> int:
+        """The palette index new weft picks start on (colour 1 when the palette has one)."""
+        return min(1, len(self.palette) - 1)
+
+    def set_palette_color(self, index: int, color: str) -> bool:
+        """Change a palette colour; every thread using it changes with it."""
+        self._index("palette color", index, len(self.palette))
+        color = _check_color(color)
+        if self.palette[index] == color:
+            return False
+        self.palette[index] = color
+        return True
+
+    def add_palette_color(self, color: str) -> int:
+        """Append a colour to the palette and return its index. The palette has no size limit."""
+        self.palette.append(_check_color(color))
+        return len(self.palette) - 1
+
+    def remove_palette_color(self, index: int) -> None:
+        """Remove a colour. Threads that used it move to colour 1 (or colour 2 if colour 1 itself
+        is removed), and later colours shift down by one. The last colour cannot be removed."""
+        count = len(self.palette)
+        self._index("palette color", index, count)
+        if count == 1:
+            raise ValueError("the palette must keep at least one color")
+        remap = np.arange(count)
+        remap[index] = 0 if index != 0 else 1
+        remap = remap - (remap > index)
+        self.warp_colors = remap[self.warp_colors].astype(np.int32)
+        self.weft_colors = remap[self.weft_colors].astype(np.int32)
+        del self.palette[index]
+
+    def set_warp_color(self, end: int, color_index: int) -> bool:
+        self._index("end", end, self.ends)
+        self._index("palette color", color_index, len(self.palette))
+        if self.warp_colors[end] == color_index:
+            return False
+        self.warp_colors[end] = color_index
+        return True
+
+    def set_weft_color(self, pick: int, color_index: int) -> bool:
+        self._index("pick", pick, self.picks)
+        self._index("palette color", color_index, len(self.palette))
+        if self.weft_colors[pick] == color_index:
+            return False
+        self.weft_colors[pick] = color_index
         return True
 
     def clear(self) -> bool:
-        """Blank threading, tie-up, treadling and liftplan, keeping dimensions and mode."""
+        """Blank threading, tie-up, treadling and liftplan, keeping dimensions, mode and colours."""
         if not (self.threading >= 0).any() and not self.tieup.any() \
                 and not self.treadling.any() and not self.liftplan.any():
             return False
@@ -210,10 +282,11 @@ class Draft:
 
     # ---- uniform matrix view of each editable panel ----
     def matrix(self, panel: str) -> np.ndarray:
-        """A copy of a panel as a 2-D bool array, rows then columns:
+        """A copy of a panel as a 2-D array, rows then columns:
 
         threading (ends, shafts), tieup (treadles, shafts),
-        treadling (picks, treadles), liftplan (picks, shafts).
+        treadling (picks, treadles), liftplan (picks, shafts) are bool;
+        warp (ends, 1) and weft (picks, 1) hold palette indices (int).
         These are the same coordinates as ``Hit.a`` / ``Hit.b`` in the layout.
         """
         if panel == "threading":
@@ -224,17 +297,39 @@ class Draft:
             return self.treadling.copy()
         if panel == "liftplan":
             return self.liftplan.copy()
+        if panel == "warp":
+            return self.warp_colors[:, None].copy()
+        if panel == "weft":
+            return self.weft_colors[:, None].copy()
         raise ValueError(f"unknown panel {panel!r}")
+
+    def clear_value(self, panel: str) -> int:
+        """What clearing a cell of this panel means: empty for the grids, the default
+        thread colour for the colour strips."""
+        if panel == "warp":
+            return 0
+        if panel == "weft":
+            return self.default_weft_color()
+        return 0
 
     def set_matrix(self, panel: str, matrix: np.ndarray) -> bool:
         """Replace a panel from a matrix of the same shape. Returns True if anything changed.
 
         Threading holds one shaft per end, so a row with several cells set keeps the lowest
-        shaft, and a row with none leaves the end unthreaded.
+        shaft, and a row with none leaves the end unthreaded. Colour strips must hold valid
+        palette indices.
         """
         current = self.matrix(panel)
         if matrix.shape != current.shape:
             raise ValueError(f"{panel} matrix must have shape {current.shape}, got {matrix.shape}")
+        if panel in COLOR_PANELS:
+            values = matrix[:, 0].astype(np.int32)
+            if values.size and (values.min() < 0 or values.max() >= len(self.palette)):
+                raise ValueError(f"{panel} colors must be palette numbers 1 to {len(self.palette)}")
+            if (values == current[:, 0]).all():
+                return False
+            setattr(self, "warp_colors" if panel == "warp" else "weft_colors", values)
+            return True
         matrix = matrix.astype(bool)
         if panel == "threading":
             new = np.where(matrix.any(axis=1), matrix.argmax(axis=1), UNTHREADED).astype(np.int16)
@@ -257,6 +352,9 @@ class Draft:
             liftplan=self.liftplan.copy(),
             rising=self.rising,
             liftplan_mode=self.liftplan_mode,
+            palette=tuple(self.palette),
+            warp_colors=self.warp_colors.copy(),
+            weft_colors=self.weft_colors.copy(),
         )
 
     def restore(self, state: DraftState) -> None:
@@ -266,3 +364,22 @@ class Draft:
         self.liftplan = state.liftplan.copy()
         self.rising = state.rising
         self.liftplan_mode = state.liftplan_mode
+        self.palette = list(state.palette)
+        self.warp_colors = state.warp_colors.copy()
+        self.weft_colors = state.weft_colors.copy()
+
+    def replace_structure(self, other: "Draft") -> None:
+        """Take another draft's threading, tie-up, treadling, liftplan and dimensions, but keep
+        this draft's palette, thread colours, shed direction (and resize the colours to fit)."""
+        palette = list(self.palette)
+        rising = self.rising
+        warp, weft = self.warp_colors, self.weft_colors
+        self.threading = other.threading.copy()
+        self.tieup = other.tieup.copy()
+        self.treadling = other.treadling.copy()
+        self.liftplan = other.liftplan.copy()
+        self.liftplan_mode = other.liftplan_mode
+        self.rising = rising
+        self.palette = palette
+        self.warp_colors = _resized(warp, (self.ends,), 0)
+        self.weft_colors = _resized(weft, (self.picks,), self.default_weft_color())

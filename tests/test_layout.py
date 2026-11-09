@@ -103,3 +103,40 @@ def test_labels_are_one_based_and_end_numbers_run_right_to_left():
     assert picks == ["4", "8", "12", "16"]
     shafts = [lab.text for lab in lay.labels() if lab.anchor == "w" and lab.x < lay.tieup.x]
     assert shafts == ["4", "3", "2", "1"]  # top to bottom
+
+
+# ---- colour strips ----
+
+def test_warp_strip_sits_above_the_threading_and_weft_strip_right_of_the_pick_numbers():
+    lay = DraftLayout.build(Draft(ends=10, picks=8, shafts=4, treadles=6), cell=10)
+    assert (lay.warp.cols, lay.warp.rows) == (10, 1)
+    assert (lay.weft.cols, lay.weft.rows) == (1, 8)
+    assert lay.warp.x == lay.threading.x and lay.warp.bottom < lay.threading.y   # room for end numbers between
+    assert lay.weft.y == lay.drawdown.y and lay.weft.x > lay.treadling.right     # room for pick numbers between
+    assert lay.width > lay.weft.right and lay.height > lay.drawdown.bottom
+
+
+def test_no_panel_overlaps_another():
+    lay = DraftLayout.build(Draft(ends=10, picks=8, shafts=4, treadles=6), cell=10)
+    grids = [lay.warp, lay.weft, lay.threading, lay.tieup, lay.treadling, lay.drawdown]
+    for i, a in enumerate(grids):
+        for b in grids[i + 1:]:
+            apart = a.right <= b.x or b.right <= a.x or a.bottom <= b.y or b.bottom <= a.y
+            assert apart, (a, b)
+
+
+def test_warp_strip_hits_number_ends_right_to_left_and_weft_strip_picks_top_to_bottom():
+    lay = DraftLayout.build(Draft(ends=10, picks=8, shafts=4, treadles=6), cell=10)
+    assert lay.hit(*centre(lay.warp, 0, 9)) == Hit("warp", 0, 0)    # right-hand cell is end 1
+    assert lay.hit(*centre(lay.warp, 0, 0)) == Hit("warp", 9, 0)
+    assert lay.hit(*centre(lay.weft, 0, 0)) == Hit("weft", 0, 0)    # top cell is pick 1
+    assert lay.hit(*centre(lay.weft, 7, 0)) == Hit("weft", 7, 0)
+
+
+def test_strips_remain_in_liftplan_mode():
+    d = Draft(ends=10, picks=8, shafts=4, treadles=6)
+    d.set_liftplan_mode(True)
+    lay = DraftLayout.build(d, cell=10)
+    assert lay.hit(*centre(lay.warp, 0, 3)) == Hit("warp", 6, 0)
+    assert lay.hit(*centre(lay.weft, 2, 0)) == Hit("weft", 2, 0)
+    assert lay.grid("warp") is lay.warp and lay.grid("weft") is lay.weft

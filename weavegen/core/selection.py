@@ -57,6 +57,12 @@ def matrix_to_display(draft: Draft, panel: str, rect: Rect) -> tuple[int, int, i
         return (draft.shafts - 1 - rect.c1, rect.r0, draft.shafts - 1 - rect.c0, rect.r1)
     if panel in ("treadling", "liftplan"):
         return (rect.r0, rect.c0, rect.r1, rect.c1)
+    if panel == "warp":
+        # matrix (end, 0) -> a one-row strip, col = ends-1-end
+        return (0, draft.ends - 1 - rect.r1, 0, draft.ends - 1 - rect.r0)
+    if panel == "weft":
+        # matrix (pick, 0) -> a one-column strip, row = pick
+        return (rect.r0, 0, rect.r1, 0)
     raise ValueError(f"unknown panel {panel!r}")
 
 
@@ -64,9 +70,10 @@ def display_axis(panel: str, direction: str) -> str:
     """Which matrix axis ("rows" or "cols") runs horizontally ("h") or vertically ("v") on screen."""
     if direction not in ("h", "v"):
         raise ValueError("direction must be 'h' or 'v'")
-    horizontal_is_rows = panel in ("threading", "tieup")  # ends / treadles run across the screen
-    if panel not in ("threading", "tieup", "treadling", "liftplan"):
+    if panel not in ("threading", "tieup", "treadling", "liftplan", "warp", "weft"):
         raise ValueError(f"unknown panel {panel!r}")
+    # Ends and treadles (and so the warp strip) run across the screen as matrix rows.
+    horizontal_is_rows = panel in ("threading", "tieup", "warp")
     if direction == "h":
         return "rows" if horizontal_is_rows else "cols"
     return "cols" if horizontal_is_rows else "rows"
@@ -80,4 +87,8 @@ def display_shift_to_matrix(panel: str, dcol: int, drow: int) -> tuple[int, int]
         return dcol, -drow       # treadles run left-to-right, shafts bottom-to-top
     if panel in ("treadling", "liftplan"):
         return drow, dcol
+    if panel == "warp":
+        return -dcol, 0          # ends run right-to-left; the strip has a single column
+    if panel == "weft":
+        return drow, 0           # picks run top-to-bottom
     raise ValueError(f"unknown panel {panel!r}")

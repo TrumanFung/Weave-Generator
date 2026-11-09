@@ -77,3 +77,30 @@ def test_display_shift_to_matrix():
     assert display_shift_to_matrix("tieup", dcol=1, drow=1) == (1, -1)
     assert display_shift_to_matrix("treadling", dcol=1, drow=2) == (2, 1)
     assert display_shift_to_matrix("liftplan", dcol=-1, drow=0) == (0, -1)
+
+
+# ---- colour strips ----
+
+@pytest.mark.parametrize("panel", ["warp", "weft"])
+def test_strip_matrix_to_display_agrees_with_layout_hit_testing(panel):
+    draft = Draft(ends=9, picks=7, shafts=4, treadles=4)
+    layout = DraftLayout.build(draft, cell=12)
+    grid = layout.grid(panel)
+    for a in range(draft.matrix(panel).shape[0]):
+        r0, c0, r1, c1 = matrix_to_display(draft, panel, Rect(a, a, 0, 0))
+        assert (r0, c0) == (r1, c1)
+        hit = layout.hit(grid.x + (c0 + 0.5) * grid.cell, grid.y + (r0 + 0.5) * grid.cell)
+        assert (hit.panel, hit.a, hit.b) == (panel, a, 0)
+
+
+def test_multi_cell_strip_rects_map_to_the_right_display_block():
+    d = Draft(ends=10, picks=8)
+    assert matrix_to_display(d, "warp", Rect(2, 4, 0, 0)) == (0, 5, 0, 7)   # ends 3-5, right to left
+    assert matrix_to_display(d, "weft", Rect(2, 4, 0, 0)) == (2, 0, 4, 0)   # picks 3-5, top to bottom
+
+
+def test_strip_axes_and_shifts():
+    assert display_axis("warp", "h") == "rows" and display_axis("warp", "v") == "cols"
+    assert display_axis("weft", "v") == "rows" and display_axis("weft", "h") == "cols"
+    assert display_shift_to_matrix("warp", dcol=1, drow=0) == (-1, 0)
+    assert display_shift_to_matrix("weft", dcol=0, drow=2) == (2, 0)

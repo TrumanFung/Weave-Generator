@@ -1,4 +1,4 @@
-"""PNG export of a whole draft (threading, tie-up, treadling, drawdown and rulers)."""
+"""PNG export of a whole draft (colour strips, threading, tie-up, treadling, drawdown and rulers)."""
 
 from __future__ import annotations
 
@@ -11,10 +11,12 @@ from weavegen.core.render import render_panels
 LABEL_COLOR = "#b45a5a"
 
 
-def render_draft_image(draft: Draft, warp_color: str, weft_color: str, cell: int = 12) -> Image.Image:
+def render_draft_image(draft: Draft, cell: int = 12, cloth_thickness: float | None = None) -> Image.Image:
+    """Render every panel with the draft's own thread colours. With ``cloth_thickness`` the
+    drawdown is drawn as woven yarn instead of flat squares."""
     layout = DraftLayout.build(draft, cell)
     img = Image.new("RGB", (int(layout.width), int(layout.height)), "white")
-    for name, pixels in render_panels(draft, cell, warp_color, weft_color).items():
+    for name, pixels in render_panels(draft, cell, cloth_thickness).items():
         grid = layout.grid(name)
         img.paste(Image.fromarray(pixels), (int(grid.x), int(grid.y)))
 

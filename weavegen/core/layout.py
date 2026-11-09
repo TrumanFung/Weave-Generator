@@ -2,8 +2,9 @@
 
 Standard handweaving layout::
 
+    [ warp colours ]
     [ threading ] gap [ tie-up   ]
-    [ drawdown  ] gap [ treadling]
+    [ drawdown  ] gap [ treadling] [weft colours]
 
 Ends are numbered right to left and shafts bottom to top; picks run top to bottom and
 treadles left to right. In liftplan mode the tie-up is hidden and the treadling area
@@ -19,10 +20,11 @@ from typing import NamedTuple
 from weavegen.core.draft import Draft
 
 MARGIN_L = 6
-MARGIN_T = 20
-MARGIN_R = 36
+MARGIN_R = 36   # room for the pick numbers between the treadling and the weft colour strip
 MARGIN_B = 6
 GAP = 22
+STRIP_PAD = 4   # space above the warp colour strip and right of the weft colour strip
+LABEL_BAND = 18  # room for end and treadle numbers above the threading and tie-up
 
 
 @dataclass(frozen=True)
@@ -66,7 +68,8 @@ class Hit(NamedTuple):
     """A cell under the pointer, in draft coordinates (0-based).
 
     panel is one of: threading (a=end, b=shaft), tieup (a=treadle, b=shaft),
-    treadling (a=pick, b=treadle), liftplan (a=pick, b=shaft), drawdown (a=pick, b=end).
+    treadling (a=pick, b=treadle), liftplan (a=pick, b=shaft), drawdown (a=pick, b=end),
+    warp (a=end, b=0) or weft (a=pick, b=0) for the thread colour strips.
     """
 
     panel: str
@@ -101,6 +104,8 @@ class DraftLayout:
     tieup: Grid
     treadling: Grid  # the liftplan grid when liftplan_mode
     drawdown: Grid
+    warp: Grid  # one row of thread colours, one cell per end
+    weft: Grid  # one column of thread colours, one cell per pick
     width: float
     height: float
 
@@ -110,15 +115,18 @@ class DraftLayout:
         shafts, treadles = draft.shafts, draft.treadles
         side_cols = shafts if draft.liftplan_mode else treadles
 
-        thr = Grid(MARGIN_L, MARGIN_T, cell, ends, shafts)
-        tie = Grid(thr.right + GAP, MARGIN_T, cell, treadles, shafts)
+        warp = Grid(MARGIN_L, STRIP_PAD, cell, ends, 1)
+        top = warp.bottom + LABEL_BAND
+        thr = Grid(MARGIN_L, top, cell, ends, shafts)
+        tie = Grid(thr.right + GAP, top, cell, treadles, shafts)
         draw = Grid(MARGIN_L, thr.bottom + GAP, cell, ends, picks)
         tread = Grid(tie.x, draw.y, cell, side_cols, picks)
+        weft = Grid(tread.right + MARGIN_R, draw.y, cell, 1, picks)
         return cls(
             cell=cell, ends=ends, picks=picks, shafts=shafts, treadles=treadles,
             liftplan_mode=draft.liftplan_mode,
-            threading=thr, tieup=tie, treadling=tread, drawdown=draw,
-            width=tread.right + MARGIN_R,
+            threading=thr, tieup=tie, treadling=tread, drawdown=draw, warp=warp, weft=weft,
+            width=weft.right + STRIP_PAD,
             height=draw.bottom + MARGIN_B,
         )
 
@@ -130,12 +138,22 @@ class DraftLayout:
             "treadling": self.treadling,
             "liftplan": self.treadling,
             "drawdown": self.drawdown,
+            "warp": self.warp,
+            "weft": self.weft,
         }
         if panel not in grids:
             raise ValueError(f"unknown panel {panel!r}")
         return grids[panel]
 
     def hit(self, x: float, y: float) -> Hit | None:
+        found = self.warp.pixel_to_cell(x, y)
+        if found:
+            return Hit("warp", self.ends - 1 - found[1], 0)
+
+        found = self.weft.pixel_to_cell(x, y)
+        if found:
+            return Hit("weft", found[0], 0)
+
         found = self.threading.pixel_to_cell(x, y)
         if found:
             row, col = found

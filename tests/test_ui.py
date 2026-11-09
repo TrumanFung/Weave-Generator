@@ -19,6 +19,8 @@ def app(monkeypatch):
     try:
         application = app_module.WeaveGeneratorApp()
     except tk.TclError as exc:
+        if "display" not in str(exc).lower():     # only a missing display is a reason to skip
+            raise
         pytest.skip(f"no display available: {exc}")
     application.root.withdraw()
     errors: list[str] = []
@@ -374,3 +376,486 @@ def test_menus_expose_the_new_commands(app):
     for expected in ("Cut", "Copy", "Paste", "Flip horizontal", "Flip vertical",
                      "Rotate 90 degrees", "Repeat selection to the end", "Wrap panel"):
         assert expected in edit_labels
+
+
+# ---- colours: palette, strips, stripes ----
+
+def swatch_count(app):
+    return len(app.swatch_frame.winfo_children())
+
+
+def test_palette_swatches_follow_the_draft_and_selecting_one_makes_it_active(app):
+    assert swatch_count(app) == 2 and app.active_color == 0
+    app.select_color(1)
+    assert app.active_color == 1 and "Colour 2" in app.status.cget("text")
+    app.select_color(7)                                   # no such colour: ignored
+    assert app.active_color == 1
+
+
+def test_pencil_paints_the_selected_colour_into_the_warp_and_weft_strips(app):
+    app.add_color("#ff0000")                              # colour 3, selected
+    depth = undo_depth(app)
+    press(app, "warp", 2, 0)
+    drag_to(app, "warp", 3, 0)
+    drag_to(app, "warp", 4, 0)
+    release(app, "warp", 4, 0)
+    assert app.draft.warp_colors[:6].tolist() == [0, 0, 2, 2, 2, 0]
+    assert undo_depth(app) == depth + 1                   # the whole drag is one step
+    press(app, "weft", 5, 0)
+    release(app, "weft", 5, 0)
+    assert app.draft.weft_colors[4:7].tolist() == [1, 2, 1]
+    app.on_undo()
+    app.on_undo()
+    assert app.draft.warp_colors.tolist() == [0] * 16 and app.draft.weft_colors.tolist() == [1] * 16
+
+
+def test_clicking_a_strip_cell_that_already_has_the_colour_does_not_create_an_undo_step(app):
+    depth = undo_depth(app)
+    app.select_color(0)
+    press(app, "warp", 3, 0)                              # already colour 1
+    release(app, "warp", 3, 0)
+    assert undo_depth(app) == depth
+
+
+def test_painting_a_strip_changes_the_cloth_colours_but_not_the_structure(app):
+    structure = app.draft.drawdown().copy()
+    app.add_color("#ff0000")
+    stroke(app, "warp", (0, 0), (15, 0))
+    assert (app.draft.drawdown() == structure).all()      # colour never changes which thread is on top
+    assert (app.draft.warp_colors == 2).all()
+
+
+def test_line_tool_paints_a_run_of_the_selected_colour_in_a_strip(app):
+    app.add_color("#00ff00")
+    app.tool_var.set("line")
+    stroke(app, "weft", (2, 0), (5, 0))
+    assert app.draft.weft_colors[:8].tolist() == [1, 1, 2, 2, 2, 2, 1, 1]
+
+
+def test_select_and_repeat_build_stripes_in_the_warp_strip(app):
+    app.add_color("#ff0000")
+    app.tool_var.set("pencil")
+    stroke(app, "warp", (0, 0), (1, 0))                   # ends 1-2 red
+    select(app, "warp", (0, 0), (3, 0))                   # ends 1-4: red red base base
+    app.on_repeat()
+    assert app.draft.warp_colors.tolist() == [2, 2, 0, 0] * 4
+    assert app.canvas.find_withtag("selection")           # the overlay works on strips too
+
+
+def test_flip_and_delete_work_on_a_strip(app):
+    app.add_color("#ff0000")
+    stroke(app, "warp", (0, 0), (0, 0))                   # only end 1 is red
+    select(app, "warp", (0, 0), (3, 0))
+    app.on_flip("h")                                      # mirror left-right on screen
+    assert app.draft.warp_colors[:4].tolist() == [0, 0, 0, 2]
+    app.on_delete()                                       # back to the default warp colour
+    assert app.draft.warp_colors[:4].tolist() == [0, 0, 0, 0]
+
+
+def test_deleting_a_weft_selection_restores_the_default_weft_colour_not_colour_one(app):
+    app.select_color(0)
+    stroke(app, "weft", (0, 0), (3, 0))                   # weft picks 1-4 painted with colour 1
+    assert app.draft.weft_colors[:4].tolist() == [0, 0, 0, 0]
+    select(app, "weft", (0, 0), (3, 0))
+    app.on_delete()
+    assert app.draft.weft_colors[:4].tolist() == [1, 1, 1, 1]
+
+
+def test_rotating_a_strip_selection_is_refused(app):
+    select(app, "warp", (0, 0), (0, 0))
+    app.on_rotate()
+    assert app.errors and "colour strips" in app.errors[-1]
+
+
+def test_wrap_shifts_the_warp_colours(app):
+    app.add_color("#ff0000")
+    stroke(app, "warp", (0, 0), (0, 0))                   # end 1 red; the strip is now the active panel
+    app.on_wrap(1, 0)                                     # right on screen = to a lower end number, wrapping
+    assert app.draft.warp_colors.tolist() == [0] * 15 + [2]
+
+
+def test_hovering_a_strip_cell_names_its_colour(app):
+    app.draft.set_warp_color(2, 1)
+    app.on_hover(at(app, "warp", 2, 0))
+    assert "end 3" in app.status.cget("text") and "colour 2" in app.status.cget("text")
+    app.on_hover(at(app, "weft", 4, 0))
+    assert "pick 5" in app.status.cget("text") and "colour 2" in app.status.cget("text")
+
+
+def test_add_color_selects_it_adds_a_swatch_and_undoes_in_one_step(app):
+    depth = undo_depth(app)
+    assert app.add_color("#336699")
+    assert app.draft.palette[2] == "#336699" and app.active_color == 2
+    assert swatch_count(app) == 3 and undo_depth(app) == depth + 1
+    app.on_undo()
+    assert len(app.draft.palette) == 2 and app.active_color == 1 and swatch_count(app) == 2
+
+
+def test_add_color_with_a_bad_value_reports_an_error_and_changes_nothing(app):
+    assert not app.add_color("blue")
+    assert app.errors and len(app.draft.palette) == 2 and undo_depth(app) == 0
+
+
+def test_edit_color_recolours_every_thread_that_uses_it(app):
+    assert app.edit_color(0, "#ff0000")
+    assert app.draft.palette[0] == "#ff0000"
+    app.edit_color(0, "#ff0000")                          # unchanged: no extra undo step
+    assert undo_depth(app) == 1
+    app.on_undo()
+    assert app.draft.palette[0] == "#1f2937"
+
+
+def test_remove_color_reassigns_threads_and_the_last_colour_is_protected(app):
+    app.add_color("#ff0000")
+    app.draft.warp_colors[:4] = 2
+    assert app.remove_color(2)
+    assert len(app.draft.palette) == 2 and app.draft.warp_colors[:4].tolist() == [0, 0, 0, 0]
+    assert app.remove_color(1)
+    depth = undo_depth(app)
+    assert not app.remove_color(0)                        # the palette must keep one colour
+    assert app.errors and len(app.draft.palette) == 1 and undo_depth(app) == depth
+
+
+def test_the_palette_has_no_practical_limit(app):
+    for i in range(40):
+        assert app.add_color(f"#{i * 6:02x}{i * 3:02x}{255 - i:02x}")
+    assert len(app.draft.palette) == 42 and swatch_count(app) == 42
+
+
+def test_stripes_logic_applies_validates_and_undoes_in_one_step(app):
+    app.add_color("#ff0000")
+    depth = undo_depth(app)
+    assert app.stripes("warp", "1:3, 3:1")
+    assert app.draft.warp_colors.tolist() == [0, 0, 0, 2] * 4
+    assert undo_depth(app) == depth + 1
+    assert not app.stripes("warp", "9:2")                 # colour 9 does not exist
+    assert not app.stripes("weft", "nonsense")
+    assert len(app.errors) == 2 and app.draft.warp_colors.tolist() == [0, 0, 0, 2] * 4
+    app.on_undo()
+    assert app.draft.warp_colors.tolist() == [0] * 16
+
+
+def test_a_preset_keeps_the_palette_and_thread_colours(app):
+    app.add_color("#ff0000")
+    app.stripes("warp", "1:2, 3:2")
+    stripes_before = app.draft.warp_colors.copy()
+    assert app.apply_preset("satin_5")
+    assert len(app.draft.palette) == 3
+    assert (app.draft.warp_colors == stripes_before).all()
+    app.on_undo()
+    assert app.draft.shafts == 4 and (app.draft.warp_colors == stripes_before).all()
+
+
+# ---- cloth view ----
+
+def test_cloth_view_passes_the_yarn_width_to_the_renderer(app, monkeypatch):
+    seen = []
+    real = app_module.render_panels
+    monkeypatch.setattr(app_module, "render_panels",
+                        lambda draft, cell, cloth=None: (seen.append(cloth), real(draft, cell, cloth))[1])
+    app._refresh_images()
+    assert seen[-1] is None                               # the flat drawdown by default
+    app.view_var.set("cloth")
+    app._refresh_images()
+    assert seen[-1] == pytest.approx(0.85)
+    app.yarn_var.set("100")
+    app._refresh_images()
+    assert seen[-1] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("text,expected", [("60", 0.6), ("5", 0.3), ("250", 1.0), ("abc", 0.85), ("", 0.85)])
+def test_yarn_width_is_clamped_and_falls_back_when_unreadable(app, text, expected):
+    app.view_var.set("cloth")
+    app.yarn_var.set(text)
+    assert app._cloth_thickness() == pytest.approx(expected)
+
+
+def test_switching_views_never_changes_the_draft_or_its_history(app):
+    before = app.draft.snapshot()
+    depth = undo_depth(app)
+    for view in ("cloth", "drawdown", "cloth"):
+        app.view_var.set(view)
+        app._refresh_images()
+    assert undo_depth(app) == depth and (app.draft.threading == before.threading).all()
+
+
+def test_the_cloth_view_still_lets_you_edit(app):
+    app.view_var.set("cloth")
+    app._refresh_images()
+    press(app, "threading", 0, 3)
+    release(app, "threading", 0, 3)
+    assert app.draft.threading[0] == 3
+
+
+def test_export_follows_the_current_view(app, monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module.messagebox, "showinfo", lambda *a, **k: None)
+    flat, woven = tmp_path / "flat.png", tmp_path / "woven.png"
+    monkeypatch.setattr(app_module.filedialog, "asksaveasfilename", lambda **k: str(flat))
+    app.on_export()
+    app.view_var.set("cloth")
+    monkeypatch.setattr(app_module.filedialog, "asksaveasfilename", lambda **k: str(woven))
+    app.on_export()
+    from PIL import Image
+    a, b = Image.open(flat), Image.open(woven)
+    assert a.size == b.size
+    assert len(b.getcolors(maxcolors=1_000_000)) > len(a.getcolors(maxcolors=1_000_000))
+
+
+def test_the_old_two_colour_pickers_are_gone(app):
+    assert not hasattr(app, "warp_color") and not hasattr(app, "on_pick_warp")
+
+
+# ---- pencil drags: Tk reports sparse motion events, so the pencil must fill the gaps ----
+
+def test_a_fast_pencil_drag_leaves_no_gaps_in_a_strip(app):
+    app.add_color("#ff0000")
+    press(app, "warp", 1, 0)
+    drag_to(app, "warp", 9, 0)                            # one motion event, eight cells away
+    release(app, "warp", 9, 0)
+    assert app.draft.warp_colors[:11].tolist() == [0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0]
+
+
+def test_a_fast_diagonal_pencil_drag_fills_the_run_in_the_tieup(app):
+    app.draft.clear()
+    press(app, "tieup", 0, 0)
+    drag_to(app, "tieup", 3, 3)
+    release(app, "tieup", 3, 3)
+    assert [bool(app.draft.tieup[i, i]) for i in range(4)] == [True] * 4
+
+
+def test_leaving_a_panel_mid_drag_does_not_bridge_the_gap_on_return(app):
+    app.add_color("#ff0000")
+    press(app, "warp", 1, 0)
+    drag_to(app, "warp", 2, 0)
+    app.on_drag(at(app, "weft", 3, 0))                    # pointer strays into another panel
+    drag_to(app, "warp", 8, 0)                            # ...and comes back far away
+    release(app, "warp", 8, 0)
+    assert app.draft.warp_colors[:10].tolist() == [0, 2, 2, 0, 0, 0, 0, 0, 2, 0]
+
+
+# ---- files: WIF open/save, SVG/PDF export, print ----
+
+def wif_file(tmp_path, name="sample.wif"):
+    """A WIF file holding a recognisably different draft: 6 ends, 3 picks, 2 shafts, 3 colours."""
+    from weavegen.core.draft import Draft
+    from weavegen.io import wif
+    d = Draft(ends=6, picks=3, shafts=2, treadles=2, rising=False)
+    d.threading[:] = [0, 1, 0, 1, 0, 1]
+    d.tieup[0, 0] = d.tieup[1, 1] = True
+    d.treadling[0, 0] = d.treadling[1, 1] = d.treadling[2, 0] = True
+    d.add_palette_color("#336699")
+    d.warp_colors[:] = [2, 0, 2, 0, 2, 0]
+    path = tmp_path / name
+    wif.save(d, path)
+    return path, d
+
+
+def test_opening_a_wif_replaces_the_draft_resizes_the_controls_and_names_the_window(app, tmp_path):
+    path, expected = wif_file(tmp_path)
+    assert app.open_wif(str(path))
+    assert app.draft.threading.tolist() == expected.threading.tolist()
+    assert app.draft.palette == expected.palette and app.draft.rising is False
+    assert (app.draft.ends, app.draft.picks, app.draft.shafts, app.draft.treadles) == (6, 3, 2, 2)
+    assert app.size_vars["ends"].get() == "6" and app.size_vars["shafts"].get() == "2"
+    assert app.root.title() == "sample.wif - Weave Generator" and app.file_path == str(path)
+    assert swatch_count(app) == 3 and "sample.wif" in app.status.cget("text")
+
+
+def test_opening_a_wif_is_one_undo_step_that_brings_the_old_draft_back(app, tmp_path):
+    before = app.draft.snapshot()
+    path, _ = wif_file(tmp_path)
+    depth = undo_depth(app)
+    app.open_wif(str(path))
+    assert undo_depth(app) == depth + 1
+    app.on_undo()
+    assert app.draft.ends == 16 and (app.draft.threading == before.threading).all()
+    assert app.draft.palette == list(before.palette) and swatch_count(app) == 2
+    app.on_redo()
+    assert app.draft.ends == 6
+
+
+def test_opening_clears_a_selection_that_no_longer_fits(app, tmp_path):
+    select(app, "threading", (10, 0), (14, 3))
+    assert app.selection is not None
+    path, _ = wif_file(tmp_path)
+    app.open_wif(str(path))
+    assert app.selection is None
+
+
+def test_opening_a_file_that_is_not_wif_reports_it_and_changes_nothing(app, tmp_path):
+    bad = tmp_path / "bad.wif"
+    bad.write_text("this is not a draft", encoding="utf-8")
+    before, depth = app.draft.snapshot(), undo_depth(app)
+    assert not app.open_wif(str(bad))
+    assert app.errors and "bad.wif" in app.errors[-1] and "WIF" in app.errors[-1]
+    assert (app.draft.threading == before.threading).all() and undo_depth(app) == depth
+    assert app.file_path is None and app.root.title() == "Weave Generator"
+
+
+def test_opening_a_missing_file_reports_it(app, tmp_path):
+    assert not app.open_wif(str(tmp_path / "gone.wif"))
+    assert app.errors and "gone.wif" in app.errors[-1]
+
+
+def test_opening_a_file_with_losses_shows_the_warnings(app, tmp_path, monkeypatch):
+    shown = []
+    monkeypatch.setattr(app_module.messagebox, "showwarning", lambda title, message, **kw: shown.append(message))
+    path = tmp_path / "multi.wif"
+    path.write_text("[WIF]\n[WEAVING]\nShafts=3\nTreadles=1\n[WARP]\nThreads=2\n[WEFT]\nThreads=1\n"
+                    "[THREADING]\n1=1,2\n2=3\n", encoding="ascii")
+    assert app.open_wif(str(path))
+    assert len(shown) == 1 and "more than one shaft" in shown[0]
+    assert app.draft.threading.tolist() == [0, 2]
+
+
+def test_a_clean_open_shows_no_warning_dialog(app, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_module.messagebox, "showwarning",
+                        lambda *a, **k: pytest.fail("no warning expected"))
+    path, _ = wif_file(tmp_path)
+    app.open_wif(str(path))
+
+
+def test_on_open_uses_the_file_dialog_and_ignores_cancel(app, tmp_path, monkeypatch):
+    path, _ = wif_file(tmp_path)
+    monkeypatch.setattr(app_module.filedialog, "askopenfilename", lambda **k: "")
+    app.on_open()
+    assert app.draft.ends == 16
+    monkeypatch.setattr(app_module.filedialog, "askopenfilename", lambda **k: str(path))
+    app.on_open()
+    assert app.draft.ends == 6
+
+
+def test_save_asks_for_a_name_once_then_overwrites_the_same_file(app, tmp_path, monkeypatch):
+    from weavegen.io import wif
+    target = tmp_path / "mine.wif"
+    asked = []
+    monkeypatch.setattr(app_module.filedialog, "asksaveasfilename",
+                        lambda **k: asked.append(k) or str(target))
+    app.on_save()
+    assert len(asked) == 1 and asked[0]["initialfile"] == "weave_draft.wif"
+    assert target.exists() and app.file_path == str(target)
+    assert app.root.title() == "mine.wif - Weave Generator"
+    press(app, "threading", 0, 3)
+    release(app, "threading", 0, 3)
+    app.on_save()                                         # no dialog the second time
+    assert len(asked) == 1
+    assert wif.load(target).draft.threading[0] == 3
+
+
+def test_cancelling_save_as_writes_nothing_and_keeps_the_current_file(app, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_module.filedialog, "asksaveasfilename", lambda **k: "")
+    app.on_save_as()
+    assert app.file_path is None and list(tmp_path.iterdir()) == []
+
+
+def test_save_as_names_the_draft_after_the_open_file(app, tmp_path, monkeypatch):
+    path, _ = wif_file(tmp_path, "cloth.wif")
+    app.open_wif(str(path))
+    seen = {}
+    monkeypatch.setattr(app_module.filedialog, "asksaveasfilename",
+                        lambda **k: seen.update(k) or "")
+    app.on_save_as()
+    assert seen["initialfile"] == "cloth.wif" and seen["defaultextension"] == ".wif"
+
+
+def test_a_failed_save_is_reported_and_does_not_change_the_current_file(app, tmp_path):
+    assert not app.save_wif(str(tmp_path / "no_such_folder" / "x.wif"))
+    assert app.errors and "x.wif" in app.errors[-1] and app.file_path is None
+
+
+def test_a_saved_draft_opens_identically_after_the_window_has_changed(app, tmp_path):
+    app.add_color("#abcdef")
+    app.stripes("warp", "1:3, 3:1")
+    app.apply_preset("herringbone")
+    path = tmp_path / "round.wif"
+    assert app.save_wif(str(path))
+    expected = app.draft.snapshot()
+    app.on_clear()
+    app.open_wif(str(path))
+    got = app.draft.snapshot()
+    assert (got.threading == expected.threading).all() and (got.tieup == expected.tieup).all()
+    assert (got.treadling == expected.treadling).all() and got.palette == expected.palette
+    assert (got.warp_colors == expected.warp_colors).all()
+
+
+def test_the_png_export_suggests_the_open_files_name(app, tmp_path, monkeypatch):
+    path, _ = wif_file(tmp_path, "cloth.wif")
+    app.open_wif(str(path))
+    seen = {}
+    monkeypatch.setattr(app_module.filedialog, "asksaveasfilename", lambda **k: seen.update(k) or "")
+    app.on_export()
+    assert seen["initialfile"] == "cloth.png"
+
+
+def test_export_svg_writes_a_vector_file(app, tmp_path, monkeypatch):
+    import xml.etree.ElementTree as ET
+    target = tmp_path / "out.svg"
+    monkeypatch.setattr(app_module.filedialog, "asksaveasfilename", lambda **k: str(target))
+    app.on_export_svg()
+    root = ET.parse(target).getroot()
+    assert root.tag.endswith("svg") and "out.svg" in app.status.cget("text")
+
+
+def test_export_pdf_follows_the_page_size_menu(app, tmp_path, monkeypatch):
+    import re
+    boxes = {}
+    for size in ("a4", "letter"):
+        target = tmp_path / f"{size}.pdf"
+        app.page_var.set(size)
+        monkeypatch.setattr(app_module.filedialog, "asksaveasfilename", lambda **k: str(target))
+        app.on_export_pdf()
+        data = target.read_bytes()
+        assert data.startswith(b"%PDF-")
+        boxes[size] = sorted(float(v) for v in re.search(rb"/MediaBox \[0 0 ([\d.]+) ([\d.]+)\]", data).groups())
+    assert boxes["a4"] == pytest.approx([595.28, 841.89]) and boxes["letter"] == [612.0, 792.0]
+
+
+def test_cancelling_an_export_writes_nothing(app, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_module.filedialog, "asksaveasfilename", lambda **k: "")
+    app.on_export_svg()
+    app.on_export_pdf()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_failed_export_is_reported(app, tmp_path):
+    assert not app.export_svg(str(tmp_path / "missing" / "a.svg"))
+    assert not app.export_pdf(str(tmp_path / "missing" / "a.pdf"))
+    assert len(app.errors) == 2
+
+
+def test_print_makes_a_pdf_and_opens_it_in_the_viewer_instead_of_printing_directly(app, monkeypatch):
+    import os
+    opened = []
+    monkeypatch.setattr(app_module, "open_in_viewer", opened.append)
+    assert app.print_draft()
+    try:
+        assert len(opened) == 1 and opened[0].endswith(".pdf")
+        with open(opened[0], "rb") as handle:
+            assert handle.read(5) == b"%PDF-"
+        assert "Print command" in app.status.cget("text")
+    finally:
+        os.remove(opened[0])
+
+
+def test_print_reports_when_no_viewer_can_be_opened(app, monkeypatch):
+    import os
+    tried = []
+
+    def refuse(path):
+        tried.append(path)
+        raise OSError("no PDF viewer")
+    monkeypatch.setattr(app_module, "open_in_viewer", refuse)
+    assert not app.print_draft()
+    assert app.errors and "no PDF viewer" in app.errors[-1] and "Export PDF" in app.errors[-1]
+    assert len(tried) == 1 and not os.path.exists(tried[0])   # no temp file left behind
+
+
+def test_the_file_menu_offers_the_new_commands_and_shortcuts(app):
+    menu = app.root.nametowidget(app.root.cget("menu"))
+    file_menu = menu.nametowidget(menu.entrycget(0, "menu"))
+    labels = [file_menu.entrycget(i, "label") for i in range(file_menu.index("end") + 1)
+              if file_menu.type(i) in ("command", "cascade")]
+    for wanted in ("Open WIF...", "Save", "Save as WIF...", "Export PNG...", "Export SVG...",
+                   "Export PDF...", "Print...", "PDF page size", "Quit"):
+        assert wanted in labels
+    assert app.root.bind("<Control-o>") and app.root.bind("<Control-s>")
