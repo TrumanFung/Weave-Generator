@@ -122,6 +122,19 @@ class DraftLayout:
             height=draw.bottom + MARGIN_B,
         )
 
+    def grid(self, panel: str) -> Grid:
+        """The grid a panel is drawn in ("liftplan" shares the treadling grid)."""
+        grids = {
+            "threading": self.threading,
+            "tieup": self.tieup,
+            "treadling": self.treadling,
+            "liftplan": self.treadling,
+            "drawdown": self.drawdown,
+        }
+        if panel not in grids:
+            raise ValueError(f"unknown panel {panel!r}")
+        return grids[panel]
+
     def hit(self, x: float, y: float) -> Hit | None:
         found = self.threading.pixel_to_cell(x, y)
         if found:

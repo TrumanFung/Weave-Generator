@@ -14,15 +14,8 @@ LABEL_COLOR = "#b45a5a"
 def render_draft_image(draft: Draft, warp_color: str, weft_color: str, cell: int = 12) -> Image.Image:
     layout = DraftLayout.build(draft, cell)
     img = Image.new("RGB", (int(layout.width), int(layout.height)), "white")
-    grids = {
-        "threading": layout.threading,
-        "tieup": layout.tieup,
-        "treadling": layout.treadling,
-        "liftplan": layout.treadling,
-        "drawdown": layout.drawdown,
-    }
     for name, pixels in render_panels(draft, cell, warp_color, weft_color).items():
-        grid = grids[name]
+        grid = layout.grid(name)
         img.paste(Image.fromarray(pixels), (int(grid.x), int(grid.y)))
 
     draw = ImageDraw.Draw(img)
