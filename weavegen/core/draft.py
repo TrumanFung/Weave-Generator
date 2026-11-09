@@ -208,6 +208,46 @@ class Draft:
         self.liftplan[:] = False
         return True
 
+    # ---- uniform matrix view of each editable panel ----
+    def matrix(self, panel: str) -> np.ndarray:
+        """A copy of a panel as a 2-D bool array, rows then columns:
+
+        threading (ends, shafts), tieup (treadles, shafts),
+        treadling (picks, treadles), liftplan (picks, shafts).
+        These are the same coordinates as ``Hit.a`` / ``Hit.b`` in the layout.
+        """
+        if panel == "threading":
+            return self.threading[:, None] == np.arange(self.shafts)[None, :]
+        if panel == "tieup":
+            return self.tieup.copy()
+        if panel == "treadling":
+            return self.treadling.copy()
+        if panel == "liftplan":
+            return self.liftplan.copy()
+        raise ValueError(f"unknown panel {panel!r}")
+
+    def set_matrix(self, panel: str, matrix: np.ndarray) -> bool:
+        """Replace a panel from a matrix of the same shape. Returns True if anything changed.
+
+        Threading holds one shaft per end, so a row with several cells set keeps the lowest
+        shaft, and a row with none leaves the end unthreaded.
+        """
+        current = self.matrix(panel)
+        if matrix.shape != current.shape:
+            raise ValueError(f"{panel} matrix must have shape {current.shape}, got {matrix.shape}")
+        matrix = matrix.astype(bool)
+        if panel == "threading":
+            new = np.where(matrix.any(axis=1), matrix.argmax(axis=1), UNTHREADED).astype(np.int16)
+            if (new == self.threading).all():
+                return False
+            self.threading = new
+            return True
+        if (matrix == current).all():
+            return False
+        target = {"tieup": "tieup", "treadling": "treadling", "liftplan": "liftplan"}[panel]
+        setattr(self, target, matrix.copy())
+        return True
+
     # ---- snapshots for undo/redo ----
     def snapshot(self) -> DraftState:
         return DraftState(

@@ -12,6 +12,8 @@ You can:
 - Use several **treadles per pick**, or switch to a direct **liftplan**
 - Choose a **rising** or **sinking** shed
 - Set up to **400 ends**, **400 picks**, **32 shafts** and **32 treadles**
+- Draw with **pencil**, **line** and **select** tools; **cut, copy, paste, flip, rotate, repeat** and **wrap** selections
+- **Generate** threadings and treadlings (straight, point, advancing, skip) and tie-ups (plain, twill, satin), or start from a **preset** (plain weave, twills, herringbone, diamond, satins)
 - **Undo / redo** every edit (Ctrl+Z, Ctrl+Y)
 - **Zoom** and scroll large drafts
 - Pick **warp** and **weft** colors
@@ -76,6 +78,32 @@ It opens with a 4-shaft 2/2 twill so you can see how the panels relate.
 
 A whole press-drag-release is a single undo step.
 
+### Tools
+
+Choose a tool in the **Tool** row:
+
+- **Pencil**: click or drag to set or clear cells (the behavior above).
+- **Line**: drag to draw a straight line. Starting on a set cell erases the line instead. In the threading the line threads each end it crosses on the shaft it passes through.
+- **Select**: drag a rectangle inside one panel; it shows as a dashed outline. Clicking a single cell selects just that cell, which is also how you choose where to paste.
+
+### Edit menu (works on the selection)
+
+| Command | What it does |
+|---|---|
+| **Cut / Copy / Paste / Delete** | Standard clipboard (Ctrl+X, C, V, Del while the draft has focus). Paste goes at the selection's top-left corner and only into the same kind of panel it came from. In the threading a paste replaces whole ends. |
+| **Flip horizontal / vertical** | Mirror the selection left-right or up-down *as you see it on screen*. |
+| **Rotate 90 degrees** | Rotate a square selection (not available in the threading). |
+| **Repeat selection to the end** | Tile the selected ends (or picks) toward the last end (or pick). |
+| **Wrap panel** | Shift the whole panel you last clicked in a direction, wrapping around the edges. |
+
+### Draft menu
+
+- **Generate threading / treadling**: fill the whole panel with *Straight draw*, *Point*, *Point with repeated ends*, *Advancing* (runs of consecutive shafts, each starting further along) or *Skip* (odd shafts then even shafts). The treadling gets one treadle per pick.
+- **Tie-up**: *Plain weave*, *Twill* (any up/down, e.g. 2/1, 3/1), *Satin* (any valid move), *Invert*, *Clear*. A satin lifts one shaft per pick, so use a sinking shed for the opposite face.
+- **Replace with preset**: plain weave, 2/1, 1/2, 2/2, 3/1 and 1/3 twills, herringbone, diamond, and 5- and 8-shaft satins, at your current number of ends and picks. Your rising/sinking choice is kept.
+
+Every command is a single undo step, and invalid requests (such as a 4/4 twill on 4 shafts) show a message and change nothing. The tie-up and treadling commands are unavailable in liftplan mode, where those panels are hidden.
+
 ### Toolbar
 
 - **Ends / Picks / Shafts / Treadles + Apply**: resize the draft, keeping everything that still fits. Ends threaded on a removed shaft become unthreaded.
@@ -98,11 +126,15 @@ weavegen/
     history.py         History: undo/redo over draft snapshots
     layout.py          DraftLayout: four-panel geometry, hit-testing, ruler labels
     render.py          draft -> RGB pixel arrays, one per panel
+    selection.py       Rect, and mapping between panel matrices and the screen
+    ops.py             copy/cut/paste, flip, rotate, repeat, wrap, invert, lines
+    patterns.py        sequence generators, tie-up generators, preset drafts
   io/
     png.py             whole-draft PNG export via Pillow
   ui/
-    app.py             Tkinter window, canvas, mouse and toolbar handlers
-tests/                 pytest suite for core and export
+    app.py             Tkinter window, canvas, tools, menus, mouse and toolbar handlers
+tests/                 pytest suite: core logic, export, and UI driven with synthetic events
+                       (UI tests skip themselves when no display is available)
 ```
 
 The UI is a thin layer over `weavegen.core`, so the logic can be tested without a display and reused if the UI toolkit changes.
@@ -137,7 +169,7 @@ python -m weavegen
 
 ## Notes & Limitations
 
-- Not yet implemented: drawing tools (line, curve, select, copy/paste), pattern generators, per-thread colors, WIF import/export, printing, float finder and yardage, network drafting and double weave.
+- Not yet implemented: a curve tool, network drafting, per-thread colors, WIF import/export, printing, float finder and yardage, block substitution and double weave.
 - Each end is threaded on at most one shaft.
 - Behavior is tested primarily on **Windows** with Python 3.12. Mouse-wheel scrolling uses the Windows event model.
 
