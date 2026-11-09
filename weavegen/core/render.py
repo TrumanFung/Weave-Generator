@@ -77,11 +77,32 @@ def weft_strip(draft: Draft) -> np.ndarray:
     return palette_rgb(draft)[draft.weft_colors][:, None, :]
 
 
-def render_panels(draft: Draft, cell: int, cloth_thickness: float | None = None) -> dict[str, np.ndarray]:
+FLOAT_TINT = (225, 29, 72)   # the colour long floats are shaded with
+FLOAT_STRENGTH = 0.55        # how much of the tint is mixed in (0 to 1)
+
+
+def tint_cells(pixels: np.ndarray, mask: np.ndarray, cell: int, tint: tuple[int, int, int] = FLOAT_TINT,
+               strength: float = FLOAT_STRENGTH) -> np.ndarray:
+    """Shade the cells where ``mask`` ((rows, cols), display orientation) is True by mixing in ``tint``.
+    ``pixels`` is the panel scaled to ``cell`` px per cell; the grid lines stay as they are."""
+    big = mask.repeat(cell, axis=0).repeat(cell, axis=1)
+    if cell >= 4:
+        big[::cell, :] = False
+        big[:, ::cell] = False
+    out = pixels.copy()
+    mixed = pixels[big].astype(np.float32) * (1 - strength) + np.array(tint, dtype=np.float32) * strength
+    out[big] = mixed.astype(np.uint8)
+    return out
+
+
+def render_panels(draft: Draft, cell: int, cloth_thickness: float | None = None,
+                  highlight: np.ndarray | None = None) -> dict[str, np.ndarray]:
     """RGB array per visible panel, including the warp and weft colour strips.
 
     The drawdown shows each thread in its own colour. With ``cloth_thickness`` (0 to 1) it is
-    drawn as woven yarn instead of flat squares, see ``weavegen.core.cloth``.
+    drawn as woven yarn instead of flat squares, see ``weavegen.core.cloth``. ``highlight`` is an
+    optional ``(picks, ends)`` bool array in draft coordinates (see ``analysis.float_mask``) whose
+    True cells are shaded on the drawdown.
     """
     panels = {}
     for name, states in display_arrays(draft).items():
@@ -92,6 +113,10 @@ def render_panels(draft: Draft, cell: int, cloth_thickness: float | None = None)
     else:
         from weavegen.core.cloth import render_cloth
         panels["drawdown"] = render_cloth(draft, cell, cloth_thickness)
+    if highlight is not None:
+        if highlight.shape != (draft.picks, draft.ends):
+            raise ValueError(f"highlight must be {draft.picks} x {draft.ends}, got {highlight.shape}")
+        panels["drawdown"] = tint_cells(panels["drawdown"], highlight[:, ::-1], cell)
     panels["warp"] = scale_cells(warp_strip(draft), cell)
     panels["weft"] = scale_cells(weft_strip(draft), cell)
     return panels

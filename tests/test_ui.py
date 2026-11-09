@@ -369,7 +369,7 @@ def test_selection_survives_a_non_structural_edit(app):
 def test_menus_expose_the_new_commands(app):
     menubar = app.root.nametowidget(app.root.cget("menu"))
     labels = [menubar.entrycget(i, "label") for i in range(menubar.index("end") + 1)]
-    assert labels == ["File", "Edit", "Draft"]
+    assert labels == ["File", "Edit", "Draft", "Analysis"]
     edit = app.root.nametowidget(menubar.entrycget(1, "menu"))
     edit_labels = [edit.entrycget(i, "label") for i in range(edit.index("end") + 1)
                    if edit.type(i) != "separator"]
@@ -552,7 +552,7 @@ def test_cloth_view_passes_the_yarn_width_to_the_renderer(app, monkeypatch):
     seen = []
     real = app_module.render_panels
     monkeypatch.setattr(app_module, "render_panels",
-                        lambda draft, cell, cloth=None: (seen.append(cloth), real(draft, cell, cloth))[1])
+                        lambda draft, cell, cloth=None, highlight=None: (seen.append(cloth), real(draft, cell, cloth, highlight))[1])
     app._refresh_images()
     assert seen[-1] is None                               # the flat drawdown by default
     app.view_var.set("cloth")
@@ -859,3 +859,224 @@ def test_the_file_menu_offers_the_new_commands_and_shortcuts(app):
                    "Export PDF...", "Print...", "PDF page size", "Quit"):
         assert wanted in labels
     assert app.root.bind("<Control-o>") and app.root.bind("<Control-s>")
+
+
+# ---- analysis: float finder and yardage ----
+
+def analysis_labels(app):
+    menubar = app.root.nametowidget(app.root.cget("menu"))
+    menu = menubar.nametowidget(menubar.entrycget(3, "menu"))
+    return [menu.entrycget(i, "label") for i in range(menu.index("end") + 1) if menu.type(i) != "separator"]
+
+
+def drawdown_pixels(app):
+    return app_module.render_panels(app.draft, app.layout.cell, app._cloth_thickness(),
+                                    app._float_highlight())["drawdown"]
+
+
+def test_the_analysis_menu_lists_its_commands(app):
+    assert analysis_labels(app) == ["Highlight long floats", "Float length limit...", "Floats to show",
+                                    "Float report...", "Yardage..."]
+
+
+def test_floats_are_not_highlighted_until_asked(app):
+    app.apply_preset("satin_5")
+    assert app._float_highlight() is None
+    plain = drawdown_pixels(app).copy()
+    app.float_var.set(True)
+    app.on_toggle_floats()
+    mask = app._float_highlight()
+    assert mask is not None and mask.any()
+    assert (drawdown_pixels(app) != plain).any()
+
+
+def test_the_highlight_marks_the_cells_the_float_finder_reports(app):
+    from weavegen.core import analysis
+    app.apply_preset("satin_5")
+    app.float_var.set(True)
+    app.on_toggle_floats()
+    assert (app._float_highlight() == analysis.float_mask(app.draft, 3)).all()
+    assert "floats longer than 3" in app.status.cget("text")
+
+
+def test_a_draft_without_long_floats_says_so(app):
+    app.float_var.set(True)
+    app.on_toggle_floats()                                # the default 2/2 twill has floats of 2
+    assert not app._float_highlight().any() and "No floats longer than 3" in app.status.cget("text")
+
+
+def test_the_highlight_follows_edits(app):
+    app.apply_preset("satin_5")
+    app.float_var.set(True)
+    assert app._float_highlight().any()
+    app.apply_preset("plain")
+    assert not app._float_highlight().any()
+
+
+def test_changing_the_float_limit_updates_the_highlight_and_rejects_bad_values(app):
+    app.apply_preset("satin_5")
+    app.float_var.set(True)
+    assert app.set_float_limit(4)
+    assert app.float_limit == 4 and not app._float_highlight().any()    # satin floats are 4, not longer than 4
+    assert app.set_float_limit(2) and app._float_highlight().any()
+    depth = len(app.errors)
+    assert not app.set_float_limit(0)
+    assert app.float_limit == 2 and len(app.errors) == depth + 1
+
+
+def test_the_limit_dialog_sets_the_limit_and_cancel_keeps_it(app, monkeypatch):
+    monkeypatch.setattr(app_module.simpledialog, "askinteger", lambda *a, **k: None)
+    app.on_float_limit()
+    assert app.float_limit == 3
+    seen = {}
+    monkeypatch.setattr(app_module.simpledialog, "askinteger", lambda *a, **k: seen.update(k) or 5)
+    app.on_float_limit()
+    assert app.float_limit == 5 and seen["initialvalue"] == 3 and seen["minvalue"] == 1
+
+
+def test_the_side_choice_limits_which_floats_are_shown(app):
+    from weavegen.core import analysis
+    app.apply_preset("satin_5")
+    app.float_var.set(True)
+    both = app._float_highlight().sum()
+    app.float_side_var.set("face")
+    assert app._float_sides() == ("face",)
+    assert (app._float_highlight() == analysis.float_mask(app.draft, 3, ["face"])).all()
+    app.float_side_var.set("back")
+    assert app._float_sides() == ("back",)
+    assert app._float_highlight().sum() <= both and app._float_highlight().any()
+
+
+def test_highlighting_changes_neither_the_draft_nor_the_undo_history_nor_the_export(app, tmp_path, monkeypatch):
+    from PIL import Image
+    app.apply_preset("satin_5")
+    snapshot, depth = app.draft.snapshot(), undo_depth(app)
+    monkeypatch.setattr(app_module.messagebox, "showinfo", lambda *a, **k: None)
+    out = {}
+    for flag in (False, True):
+        app.float_var.set(flag)
+        app.on_toggle_floats()
+        out[flag] = tmp_path / f"{flag}.png"
+        monkeypatch.setattr(app_module.filedialog, "asksaveasfilename", lambda **k: str(out[flag]))
+        app.on_export()
+    assert undo_depth(app) == depth and (app.draft.threading == snapshot.threading).all()
+    assert list(Image.open(out[False]).getdata()) == list(Image.open(out[True]).getdata())
+
+
+def test_the_float_report_dialog_shows_the_summary(app, monkeypatch):
+    shown = []
+    monkeypatch.setattr(app_module.messagebox, "showinfo", lambda title, message, **k: shown.append((title, message)))
+    app.apply_preset("satin_5")
+    app.on_float_report()
+    assert shown[0][0] == "Float report" and "Longest float in each place" in shown[0][1]
+    assert "floats longer than 3" in shown[0][1]
+
+
+def test_the_highlight_works_in_the_cloth_view(app):
+    app.apply_preset("satin_5")
+    app.view_var.set("cloth")
+    plain = drawdown_pixels(app).copy()
+    app.float_var.set(True)
+    assert (drawdown_pixels(app) != plain).any()
+
+
+# ---- yardage window ----
+
+def open_yardage(app):
+    app.on_yardage()
+    return app._yardage_dialog
+
+
+def test_the_yardage_window_shows_the_default_project_for_the_current_draft(app):
+    dialog = open_yardage(app)
+    report = dialog.report
+    assert (report.ends, report.picks) == (240, 720) and report.warp_each == pytest.approx(90)
+    text = dialog.result.get("1.0", "end")
+    assert "Warp: 240 ends of 90.0 in each = 600.00 yd" in text and "#1 #1f2937" in text
+    assert dialog.message.cget("text") == ""
+
+
+def test_changing_an_entry_and_calculating_updates_the_result_and_is_remembered(app):
+    dialog = open_yardage(app)
+    dialog.vars["width"].set("10")
+    dialog.vars["epi"].set("20")
+    report = dialog.calculate()
+    assert report.ends == 200
+    assert app.yardage_settings["width"] == "10" and app.yardage_settings["unit"] == "in"
+    dialog.close()
+    again = open_yardage(app)
+    assert again.vars["width"].get() == "10" and again.vars["epi"].get() == "20"
+
+
+def test_a_mistake_in_a_field_is_shown_beside_the_form_without_a_popup(app):
+    dialog = open_yardage(app)
+    dialog.vars["epi"].set("twelve")
+    assert dialog.calculate() is None and dialog.report is None
+    assert "Ends per in" in dialog.message.cget("text") and "'twelve' is not a number" in dialog.message.cget("text")
+    assert dialog.result.get("1.0", "end").strip() == "" and app.errors == []
+    dialog.vars["epi"].set("")
+    dialog.calculate()
+    assert "enter a number" in dialog.message.cget("text")
+    dialog.vars["epi"].set("0")
+    dialog.calculate()
+    assert "greater than 0" in dialog.message.cget("text")
+    dialog.vars["epi"].set("12")
+    assert dialog.calculate() is not None and dialog.message.cget("text") == ""
+
+
+def test_switching_to_centimetres_relabels_the_fields_and_reports_metres(app):
+    dialog = open_yardage(app)
+    assert "(in)" in dialog.labels["width"].cget("text")
+    dialog.unit_var.set("cm")
+    dialog._relabel()
+    assert "(cm)" in dialog.labels["width"].cget("text") and "Ends per cm" in dialog.labels["epi"].cget("text")
+    dialog.calculate()
+    text = dialog.result.get("1.0", "end")
+    assert " m" in text and "yd" not in text and app.yardage_settings["unit"] == "cm"
+
+
+def test_the_yardage_window_uses_the_drafts_colours(app):
+    app.add_color("#c0392b")
+    app.stripes("warp", "1:3, 3:1")
+    report = open_yardage(app).report
+    by = {u.index: u.ends for u in report.colors}
+    assert by[0] == 180 and by[2] == 60                   # 240 ends in a 3:1 repeat
+
+
+def test_opening_yardage_again_reuses_the_window_and_refreshes_it(app):
+    first = open_yardage(app)
+    app.add_color("#00ff00")
+    app.stripes("weft", "3:2, 2:2")
+    second = open_yardage(app)
+    assert second is first
+    assert {u.index for u in second.report.colors} >= {1, 2}
+    first.close()
+    assert open_yardage(app) is not first
+
+
+def test_copy_puts_the_report_on_the_clipboard(app):
+    dialog = open_yardage(app)
+    dialog.copy()
+    assert "Total: 1,020.00 yd" in app.root.clipboard_get()
+    assert "Yardage copied" in app.status.cget("text")
+
+
+def test_copy_with_nothing_calculated_does_nothing(app):
+    dialog = open_yardage(app)
+    dialog.vars["width"].set("x")
+    dialog.calculate()
+    app.root.clipboard_clear()
+    app.root.clipboard_append("keep me")
+    dialog.copy()
+    assert app.root.clipboard_get() == "keep me"
+
+
+def test_parse_project_names_the_field_and_converts_numbers():
+    from weavegen.ui.yardage_dialog import FIELDS, parse_project
+    values = {key: default for key, _label, default in FIELDS}
+    project = parse_project(values, "cm")
+    assert project.unit == "cm" and project.width == 20 and project.warp_takeup == 10
+    with pytest.raises(ValueError, match="Finished width: 'abc' is not a number"):
+        parse_project({**values, "width": "abc"}, "in")
+    with pytest.raises(ValueError, match="Picks per cm: enter a number"):
+        parse_project({**values, "ppi": " "}, "cm")

@@ -22,6 +22,7 @@ You can:
 - **Open and save WIF** files, the interchange format of weaving software, to share drafts with other programs
 - **Export** the whole draft (all panels with numbered rulers) as a PNG (as drawn in the current view), or as a vector **SVG** or **PDF**
 - **Print** the draft on A4 or US Letter paper
+- Find **long floats** (shaded in red on the drawdown) and work out **yardage** per colour for a project
 
 ---
 
@@ -125,6 +126,17 @@ Every command is a single undo step, and invalid requests (such as a 4/4 twill o
 
 Things to know about WIF: this program allows one shaft per end, so if a file threads an end on several shafts only the lowest is kept and you are warned. Colours, notes, spacing and other extras that WIF can hold but this program has no use for are ignored. In liftplan mode the liftplan is saved instead of the hidden tie-up and treadling. Files that cannot be used (not a WIF, more than 400 ends or picks, more than 32 shafts or treadles, numbers outside the declared size) are reported and leave your draft unchanged.
 
+### Analysis menu
+
+- **Highlight long floats**: shades in red every cell that lies on a float longer than the limit. A *float* is a thread that passes over or under many others in a row without interlacing, which snags and sags in the cloth. Warp floats run down an end, weft floats along a pick, and each can lie on the **face** or the **back** of the cloth; **Floats to show** chooses face, back or both. The shading follows every edit, and it also appears over the cloth view.
+- **Float length limit...**: floats *longer than* this many threads are shaded (default 3, so a 5-shaft satin is flagged and a 2/2 twill is not).
+- **Float report...**: how many floats are over the limit, the longest float in each place, and where the longest ones are (end and pick numbers start at 1).
+- **Yardage...**: enter the finished width and length, the sett (ends per inch or cm), picks per inch or cm, loom waste, warp take-up, weft draw-in and shrinkage. It gives the number of ends and picks, the length of each, and the total yarn in yards (or metres) in all and for each colour. The warp and weft colour strips are repeated to fill the whole project. **Copy** puts the table on the clipboard. Your entries are kept until you close the program.
+
+The float shading is a view only: it does not change the draft or the undo history, and PNG, SVG and PDF exports do not include it.
+
+How yardage is worked out: the loom width is the finished width divided by (1 - width shrinkage), and likewise for length, because finishing shrinks the cloth. Ends = loom width x ends per unit; picks = loom length x picks per unit. Each warp end is the loom length plus warp take-up, plus the loom waste; each weft pick is the loom width plus weft draw-in. Treat the result as a careful estimate and add a margin for sampling and mistakes.
+
 ### Toolbar
 
 - **Ends / Picks / Shafts / Treadles + Apply**: resize the draft, keeping everything that still fits. Ends threaded on a removed shaft become unthreaded.
@@ -149,6 +161,8 @@ weavegen/
     render.py          draft -> RGB pixel arrays, one per panel, colour-and-weave drawdown
     cloth.py           shaded cloth-view renderer
     selection.py       Rect, and mapping between panel matrices and the screen
+    analysis.py        float finder: run lengths, float masks and reports
+    yardage.py         yardage sums and report text
     ops.py             copy/cut/paste, flip, rotate, repeat, wrap, invert, lines
     patterns.py        sequence generators, tie-up generators, preset drafts, colour stripes
   io/
@@ -159,6 +173,7 @@ weavegen/
     pdf.py             PDF export (written directly, no extra library) and page placement
   ui/
     app.py             Tkinter window, canvas, tools, menus, mouse and toolbar handlers
+    yardage_dialog.py  the yardage calculator window
 tests/                 pytest suite: core logic, export, and UI driven with synthetic events
                        (UI tests skip themselves when no display is available)
 ```
@@ -195,7 +210,8 @@ python -m weavegen
 
 ## Notes & Limitations
 
-- Not yet implemented: a curve tool, network drafting, float finder and yardage, block substitution and double weave.
+- Not yet implemented: a curve tool, network drafting, block substitution and double weave.
+- The float finder looks at the draft as drawn: it does not see floats that would form where the draft repeats. Yardage ignores the selvedge and does not convert to yarn weight.
 - Each end is threaded on at most one shaft.
 - Behavior is tested primarily on **Windows** with Python 3.12. Mouse-wheel scrolling uses the Windows event model.
 
