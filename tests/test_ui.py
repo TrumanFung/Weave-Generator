@@ -31,6 +31,15 @@ def app(monkeypatch):
     application.root.destroy()
 
 
+def submenu(app, label):
+    """The drop-down menu with this title in the menu bar."""
+    bar = app.root.nametowidget(app.root.cget("menu"))
+    for i in range(bar.index("end") + 1):
+        if bar.entrycget(i, "label") == label:
+            return bar.nametowidget(bar.entrycget(i, "menu"))
+    raise AssertionError(f"no {label} menu")
+
+
 def at(app, panel, a, b):
     x, y = app._cell_center(panel, Hit(panel, a, b))
     return types.SimpleNamespace(x=x, y=y)
@@ -369,8 +378,8 @@ def test_selection_survives_a_non_structural_edit(app):
 def test_menus_expose_the_new_commands(app):
     menubar = app.root.nametowidget(app.root.cget("menu"))
     labels = [menubar.entrycget(i, "label") for i in range(menubar.index("end") + 1)]
-    assert labels == ["File", "Edit", "Draft", "Analysis"]
-    edit = app.root.nametowidget(menubar.entrycget(1, "menu"))
+    assert labels == ["File", "Edit", "View", "Draft", "Analysis", "Help"]
+    edit = submenu(app, "Edit")
     edit_labels = [edit.entrycget(i, "label") for i in range(edit.index("end") + 1)
                    if edit.type(i) != "separator"]
     for expected in ("Cut", "Copy", "Paste", "Flip horizontal", "Flip vertical",
@@ -689,7 +698,7 @@ def test_opening_a_file_that_is_not_wif_reports_it_and_changes_nothing(app, tmp_
     assert not app.open_wif(str(bad))
     assert app.errors and "bad.wif" in app.errors[-1] and "WIF" in app.errors[-1]
     assert (app.draft.threading == before.threading).all() and undo_depth(app) == depth
-    assert app.file_path is None and app.root.title() == "Weave Generator"
+    assert app.file_path is None and app.root.title() == "Untitled - Weave Generator"
 
 
 def test_opening_a_missing_file_reports_it(app, tmp_path):
@@ -852,7 +861,7 @@ def test_print_reports_when_no_viewer_can_be_opened(app, monkeypatch):
 
 def test_the_file_menu_offers_the_new_commands_and_shortcuts(app):
     menu = app.root.nametowidget(app.root.cget("menu"))
-    file_menu = menu.nametowidget(menu.entrycget(0, "menu"))
+    file_menu = submenu(app, "File")
     labels = [file_menu.entrycget(i, "label") for i in range(file_menu.index("end") + 1)
               if file_menu.type(i) in ("command", "cascade")]
     for wanted in ("Open WIF...", "Save", "Save as WIF...", "Export PNG...", "Export SVG...",
@@ -865,7 +874,7 @@ def test_the_file_menu_offers_the_new_commands_and_shortcuts(app):
 
 def analysis_labels(app):
     menubar = app.root.nametowidget(app.root.cget("menu"))
-    menu = menubar.nametowidget(menubar.entrycget(3, "menu"))
+    menu = submenu(app, "Analysis")
     return [menu.entrycget(i, "label") for i in range(menu.index("end") + 1) if menu.type(i) != "separator"]
 
 
@@ -1094,13 +1103,13 @@ def window_open(dialog):
 
 def test_the_new_commands_are_in_the_menus(app):
     menubar = app.root.nametowidget(app.root.cget("menu"))
-    draft_menu = menubar.nametowidget(menubar.entrycget(2, "menu"))
+    draft_menu = submenu(app, "Draft")
     labels = [draft_menu.entrycget(i, "label") for i in range(draft_menu.index("end") + 1)
               if draft_menu.type(i) != "separator"]
     for wanted in ("Block substitution...", "Combine drafts...", "Network drafting...",
                    "Reduce to fewest shafts and treadles"):
         assert wanted in labels
-    file_menu = menubar.nametowidget(menubar.entrycget(0, "menu"))
+    file_menu = submenu(app, "File")
     assert "Import drawdown from image..." in [file_menu.entrycget(i, "label")
                                               for i in range(file_menu.index("end") + 1)
                                               if file_menu.type(i) != "separator"]
@@ -1385,3 +1394,373 @@ def test_the_import_command_uses_the_file_dialog_and_ignores_cancel(app, tmp_pat
     monkeypatch.setattr(app_module.filedialog, "askopenfilename", lambda **k: str(path))
     app.on_import_image()
     assert undo_depth(app) == 1
+
+
+# ---- Phase 7: unsaved changes, new, recent files, settings, shortcuts, help ----
+def answers(monkeypatch, *replies):
+    """Script the Save / Discard / Cancel question; returns the list of questions asked."""
+    asked: list[str] = []
+    queue = list(replies)
+
+    def ask(title, message, **kw):
+        asked.append(message)
+        return queue.pop(0)
+    monkeypatch.setattr(app_module.messagebox, "askyesnocancel", ask)
+    return asked
+
+
+def key(app, widget, sequence):
+    widget.focus_force()
+    app.root.update()
+    widget.event_generate(sequence)
+    app.root.update()
+
+
+def test_a_fresh_draft_is_unmodified_and_an_edit_marks_it(app):
+    assert not app.is_modified() and app.root.title() == "Untitled - Weave Generator"
+    press(app, "threading", 0, 2)
+    release(app, "threading", 0, 2)
+    assert app.is_modified() and app.root.title() == "*Untitled - Weave Generator"
+
+
+def test_undoing_back_to_the_saved_state_clears_the_marker(app):
+    press(app, "threading", 0, 2)
+    release(app, "threading", 0, 2)
+    app.on_undo()
+    assert not app.is_modified() and not app.root.title().startswith("*")
+    app.on_redo()
+    assert app.is_modified()
+
+
+def test_saving_clears_the_marker_and_shows_the_file_name(app, tmp_path):
+    app.generate("threading", "point")
+    assert app.is_modified()
+    assert app.save_wif(str(tmp_path / "a.wif"))
+    assert not app.is_modified() and app.root.title() == "a.wif - Weave Generator"
+    app.generate("threading", "straight")
+    assert app.root.title() == "*a.wif - Weave Generator"
+
+
+def test_opening_a_file_starts_clean(app, tmp_path):
+    other = app_module.Draft.twill_2_2()
+    other.set_thread(0, 3)
+    from weavegen.io import wif
+    wif.save(other, str(tmp_path / "o.wif"))
+    app.generate("threading", "point")
+    assert app.open_wif(str(tmp_path / "o.wif")) and not app.is_modified()
+
+
+def test_changing_the_view_or_zoom_is_not_an_unsaved_change(app):
+    app.on_toggle_view()
+    app.change_zoom(4)
+    app.set_float_limit(5)
+    assert not app.is_modified()
+
+
+def test_new_replaces_the_draft_and_can_be_undone(app, tmp_path):
+    app.save_wif(str(tmp_path / "a.wif"))
+    before = app.draft.snapshot()
+    app.new_draft()
+    assert app.file_path is None and not app.is_modified()
+    assert not app.draft.tieup.any() and not app.draft.treadling.any()
+    app.on_undo()
+    assert (app.draft.threading == before.threading).all() and app.draft.tieup.any()
+
+
+def test_new_asks_first_when_there_are_unsaved_changes(app, monkeypatch):
+    app.generate("threading", "point")
+    changed = app.draft.snapshot()
+    asked = answers(monkeypatch, None)                 # Cancel
+    app.on_new()
+    assert len(asked) == 1 and "this draft" in asked[0]
+    assert (app.draft.threading == changed.threading).all() and app.is_modified()
+    answers(monkeypatch, False)                        # Discard
+    app.on_new()
+    assert not app.is_modified() and not app.draft.tieup.any()
+
+
+def test_new_does_not_ask_when_nothing_changed(app, monkeypatch):
+    asked = answers(monkeypatch)
+    app.on_new()
+    assert asked == []
+
+
+def test_answering_save_saves_then_carries_on(app, tmp_path, monkeypatch):
+    target = tmp_path / "saved.wif"
+    monkeypatch.setattr(app_module.filedialog, "asksaveasfilename", lambda **k: str(target))
+    app.generate("threading", "point")
+    answers(monkeypatch, True)                         # Save
+    app.on_new()
+    assert target.exists() and not app.is_modified() and app.file_path is None
+
+
+def test_cancelling_the_save_dialog_cancels_the_action(app, monkeypatch):
+    monkeypatch.setattr(app_module.filedialog, "asksaveasfilename", lambda **k: "")
+    app.generate("threading", "point")
+    answers(monkeypatch, True)
+    app.on_new()
+    assert app.is_modified() and app.draft.tieup.any()
+
+
+def test_the_question_names_the_open_file(app, tmp_path, monkeypatch):
+    app.save_wif(str(tmp_path / "named.wif"))
+    app.generate("threading", "point")
+    asked = answers(monkeypatch, False)
+    app.confirm_discard("closing")
+    assert "named.wif" in asked[0] and "closing" in asked[0]
+
+
+def test_open_asks_before_replacing_unsaved_work(app, tmp_path, monkeypatch):
+    app.generate("threading", "point")
+    monkeypatch.setattr(app_module.filedialog, "askopenfilename", lambda **k: str(tmp_path / "x.wif"))
+    opened: list[str] = []
+    monkeypatch.setattr(app, "open_wif", lambda path: opened.append(path))
+    answers(monkeypatch, None)
+    app.on_open()
+    assert opened == []
+    answers(monkeypatch, False)
+    app.on_open()
+    assert opened == [str(tmp_path / "x.wif")]
+
+
+def test_quit_asks_and_cancel_keeps_the_window(app, monkeypatch):
+    app.generate("threading", "point")
+    answers(monkeypatch, None)
+    app.on_quit()
+    assert app.root.winfo_exists()
+
+
+def test_quit_writes_the_settings_and_closes():
+    application = app_module.WeaveGeneratorApp()
+    application.root.withdraw()
+    application.change_zoom(6)
+    application.view_var.set("cloth")
+    application.page_var.set("letter")
+    application.set_float_limit(7)
+    application.yardage_settings = {"width": "44"}
+    application.on_quit()
+    saved = app_module.Settings.load()
+    assert saved.get("zoom") == 22 and saved.get("view") == "cloth" and saved.get("page_size") == "letter"
+    assert saved.get("float_limit") == 7 and saved.get("yardage") == {"width": "44"}
+
+
+def test_settings_are_applied_on_the_next_start():
+    st = app_module.Settings.load()
+    st.set("zoom", 24)
+    st.set("view", "cloth")
+    st.set("yarn_width", 60)
+    st.set("float_side", "face")
+    st.set("page_size", "letter")
+    st.set("float_limit", 9)
+    st.set("yardage", {"width": "50"})
+    st.save()
+    application = app_module.WeaveGeneratorApp()
+    try:
+        application.root.withdraw()
+        assert application.zoom == 24 and application.view_var.get() == "cloth"
+        assert application.yarn_var.get() == "60" and application.float_side_var.get() == "face"
+        assert application.page_var.get() == "letter" and application.float_limit == 9
+        assert application.yardage_settings == {"width": "50"}
+        assert application._cloth_thickness() == 0.6
+    finally:
+        application.root.destroy()
+
+
+def test_a_saved_window_position_off_screen_keeps_only_the_size(app):
+    screen_w, screen_h = app.root.winfo_screenwidth(), app.root.winfo_screenheight()
+    assert app._fit_to_screen("900x700+10+20") == "900x700+10+20"
+    assert app._fit_to_screen(f"900x700+{screen_w + 500}+20") == "900x700"
+    assert app._fit_to_screen("900x700+-3000+20") == "900x700"
+    assert app._fit_to_screen("900x700") == "900x700"
+    assert app._fit_to_screen(f"{screen_w + 4000}x{screen_h + 4000}+0+0") == f"{screen_w}x{screen_h}+0+0"
+    assert app._fit_to_screen("nonsense") == "nonsense"
+
+
+def test_recent_files_menu_follows_opens_and_saves(app, tmp_path):
+    def entries():
+        menu = app.recent_menu
+        return [menu.entrycget(i, "label") for i in range(menu.index("end") + 1) if menu.type(i) == "command"]
+    assert entries() == ["(none yet)"]
+    app.save_wif(str(tmp_path / "one.wif"))
+    app.generate("threading", "point")
+    app.save_wif(str(tmp_path / "two.wif"))
+    assert entries()[:2] == ["1  two.wif", "2  one.wif"] and entries()[-1] == "Clear list"
+    app.open_wif(str(tmp_path / "one.wif"))
+    assert entries()[0] == "1  one.wif"
+    app.on_clear_recent()
+    assert entries() == ["(none yet)"] and app.settings.get("recent_files") == []
+
+
+def test_choosing_a_recent_file_opens_it(app, tmp_path):
+    app.save_wif(str(tmp_path / "keep.wif"))
+    app.generate("threading", "point")
+    app.save_wif(str(tmp_path / "later.wif"))
+    app.recent_menu.invoke(1)                       # the second entry: keep.wif
+    assert app.file_path == str(tmp_path / "keep.wif")
+
+
+def test_a_recent_file_that_has_gone_is_dropped(app, tmp_path):
+    path = tmp_path / "soon_gone.wif"
+    app.save_wif(str(path))
+    path.unlink()
+    app.on_open_recent(str(path))
+    assert app.errors and str(path) not in app.settings.get("recent_files")
+    assert app.recent_menu.entrycget(0, "label") == "(none yet)"
+
+
+def test_file_dialogs_start_in_the_last_folder_used(app, tmp_path, monkeypatch):
+    assert app._dialog_dir() == {}
+    app.save_wif(str(tmp_path / "a.wif"))
+    assert app._dialog_dir() == {"initialdir": str(tmp_path)}
+    app.new_draft()
+    assert app._dialog_dir() == {"initialdir": str(tmp_path)}      # remembered after New
+    seen = {}
+    monkeypatch.setattr(app_module.filedialog, "asksaveasfilename", lambda **k: seen.update(k) or "")
+    app.on_export_pdf()
+    assert seen["initialdir"] == str(tmp_path)
+
+
+def test_a_last_folder_that_no_longer_exists_is_ignored(app, tmp_path):
+    app.settings.set("last_directory", str(tmp_path / "vanished"))
+    assert app._dialog_dir() == {}
+
+
+def test_keyboard_shortcuts_reach_their_commands(app, monkeypatch):
+    calls: list[str] = []
+    names = ("on_new", "on_open", "on_save", "on_save_as", "on_print", "on_quit", "on_toggle_view", "on_shortcuts")
+    for name in names:
+        monkeypatch.setattr(app, name, lambda n=name: calls.append(n))
+    app._bind_events()                  # the bindings look the methods up when they are made
+    app.root.deiconify()
+    app.root.update()
+    for sequence, expected in (("<Control-n>", "on_new"), ("<Control-o>", "on_open"),
+                               ("<Control-s>", "on_save"), ("<Control-S>", "on_save_as"),
+                               ("<Control-p>", "on_print"), ("<Control-q>", "on_quit"),
+                               ("<Control-k>", "on_toggle_view"), ("<F1>", "on_shortcuts")):
+        calls.clear()
+        key(app, app.root, sequence)
+        assert calls == [expected], sequence
+
+
+def test_zoom_shortcuts(app):
+    app.root.deiconify()
+    app.root.update()
+    key(app, app.root, "<Control-plus>")
+    assert app.zoom == 18
+    key(app, app.root, "<Control-minus>")
+    key(app, app.root, "<Control-minus>")
+    assert app.zoom == 14
+    key(app, app.root, "<Control-0>")
+    assert app.zoom == app.ZOOM_DEFAULT
+    app.reset_zoom()
+    assert app.zoom == app.ZOOM_DEFAULT
+
+
+def test_tool_letters_work_on_the_draft_but_not_in_the_number_boxes(app):
+    app.root.deiconify()
+    app.root.update()
+    key(app, app.canvas, "<KeyPress-l>")
+    assert app.tool_var.get() == "line"
+    key(app, app.canvas, "<KeyPress-s>")
+    assert app.tool_var.get() == "select" and "Drag to select" in app.tool_hint.cget("text")
+    key(app, app.canvas, "<KeyPress-p>")
+    assert app.tool_var.get() == "pencil"
+    key(app, app.canvas, "<KeyPress-l>")
+    spin = next(w for w in app.root.winfo_children()[0].winfo_children() if w.winfo_class() == "Spinbox")
+    key(app, spin, "<KeyPress-p>")
+    assert app.tool_var.get() == "line"
+
+
+def test_select_all_and_escape(app):
+    app.root.deiconify()
+    app.root.update()
+    press(app, "tieup", 0, 0)
+    release(app, "tieup", 0, 0)
+    key(app, app.canvas, "<Control-a>")
+    panel, rect = app.selection
+    assert panel == "tieup" and (rect.height, rect.width) == app.draft.tieup.shape
+    key(app, app.root, "<Escape>")
+    assert app.selection is None
+
+
+def test_select_all_defaults_to_the_threading_and_skips_the_drawdown(app):
+    app.on_select_all()
+    assert app.selection[0] == "threading"
+    app.active_panel = "drawdown"
+    app.on_select_all()
+    assert app.selection[0] == "threading"
+    app.liftplan_var.set(True)
+    app.on_toggle_liftplan()
+    app.on_select_all()
+    assert app.selection[0] == "threading"
+
+
+def test_the_view_shortcut_and_menu_switch_between_drawdown_and_cloth(app):
+    app.on_toggle_view()
+    assert app.view_var.get() == "cloth" and app._cloth_thickness() is not None
+    app.on_toggle_view()
+    assert app.view_var.get() == "drawdown" and app._cloth_thickness() is None
+    view = submenu(app, "View")
+    labels = [view.entrycget(i, "label") for i in range(view.index("end") + 1) if view.type(i) != "separator"]
+    assert labels == ["Drawdown", "Cloth", "Switch view", "Zoom in", "Zoom out", "Standard zoom"]
+    view.invoke(1)
+    assert app.view_var.get() == "cloth"
+
+
+def test_the_menus_show_the_shortcuts(app):
+    def accel(menu_name, label):
+        menu = submenu(app, menu_name)
+        for i in range(menu.index("end") + 1):
+            if menu.type(i) != "separator" and menu.entrycget(i, "label").startswith(label):
+                return menu.entrycget(i, "accelerator")
+    assert accel("File", "New") == "Ctrl+N" and accel("File", "Save as") == "Ctrl+Shift+S"
+    assert accel("File", "Print") == "Ctrl+P" and accel("File", "Quit") == "Ctrl+Q"
+    assert accel("Edit", "Select all") == "Ctrl+A" and accel("Help", "Keyboard") == "F1"
+
+
+def test_every_listed_shortcut_has_an_entry_in_the_help_text():
+    from weavegen.ui import help as help_module
+    text = help_module.shortcuts_text()
+    for _section, rows in help_module.SHORTCUTS:
+        for keys, what in rows:
+            assert keys in text and what in text
+
+
+def test_the_help_window_opens_once(app):
+    app.on_shortcuts()
+    first = app._shortcuts_window
+    app.on_shortcuts()
+    assert app._shortcuts_window is first and first.window.winfo_exists()
+    first.window.destroy()
+    app.on_shortcuts()
+    assert app._shortcuts_window is not first
+
+
+def test_about_shows_the_version(app, monkeypatch):
+    from weavegen import __version__
+    shown = []
+    monkeypatch.setattr(app_module.messagebox, "showinfo", lambda title, message, **k: shown.append((title, message)))
+    app.on_about()
+    assert shown and __version__ in shown[0][1] and "About" in shown[0][0]
+
+
+def test_the_window_has_an_icon_and_the_assets_exist(app):
+    from weavegen.ui.help import asset_path
+    assert asset_path("icon.png").is_file() and asset_path("icon.ico").is_file()
+    assert getattr(app, "_icon", None) is not None
+
+
+def test_tooltips_appear_on_hover_and_vanish_on_leave(app):
+    from weavegen.ui.tooltip import Tooltip
+    app.root.deiconify()
+    app.root.update()
+    tip = Tooltip(app.undo_button, "Undo (Ctrl+Z)")
+    tip.show()
+    assert tip.visible
+    tip.hide()
+    assert not tip.visible
+    app.undo_button.event_generate("<Enter>")
+    app.root.update()
+    app.undo_button.event_generate("<Leave>")
+    app.root.update()
+    assert not tip.visible

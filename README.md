@@ -23,6 +23,7 @@ You can:
 - **Export** the whole draft (all panels with numbered rulers) as a PNG (as drawn in the current view), or as a vector **SVG** or **PDF**
 - **Print** the draft on A4 or US Letter paper
 - Find **long floats** (shaded in red on the drawdown) and work out **yardage** per colour for a project
+- Get a warning before you lose **unsaved changes**, reopen **recent files**, and find your zoom, view and other choices remembered next time
 
 ---
 
@@ -61,6 +62,8 @@ pip install -r requirements.txt
    ```
 
 It opens with a 4-shaft 2/2 twill so you can see how the panels relate.
+
+To make a single `WeaveGenerator.exe` that needs no Python, see [Building a Windows .exe](#building-a-windows-exe-with-pyinstaller) below.
 
 ---
 
@@ -140,7 +143,10 @@ These open a window with the options, a live **Result** line (green when the dra
 
 ### File menu
 
-- **Open WIF... / Save / Save as WIF...** (Ctrl+O, Ctrl+S): WIF is a text format read and written by most weaving programs. It keeps the size, shed direction, threading, tie-up, treadling (or liftplan), palette and thread colours. Opening a file replaces the draft but is a single undo step, so Ctrl+Z brings your previous draft back. The window title shows the open file and Save writes back to it.
+- **New** (Ctrl+N): an empty draft. Like opening a file, it is one undo step, so Ctrl+Z brings the old draft back.
+- **Open WIF... / Save / Save as WIF...** (Ctrl+O, Ctrl+S, Ctrl+Shift+S): WIF is a text format read and written by most weaving programs. It keeps the size, shed direction, threading, tie-up, treadling (or liftplan), palette and thread colours. Opening a file replaces the draft but is a single undo step, so Ctrl+Z brings your previous draft back. The window title shows the open file and Save writes back to it.
+- **Open recent**: the last eight files you opened or saved, newest first. A file that has gone is removed from the list when you try it. **Clear list** empties it.
+- **Unsaved changes**: a `*` before the name in the title bar means the draft differs from the saved file (undoing back to the saved state removes it). New, Open, Open recent and Quit ask whether to **save**, **discard** or **cancel** first. Changing the view, zoom or float limit is not a change to the draft.
 - **Export PNG / SVG / PDF**: PNG follows the current view (Drawdown or Cloth). SVG and PDF are vector graphics that stay sharp at any size; they always show the flat colour drawdown. The PDF is a single page whose orientation is chosen so the draft prints as large as possible; choose **PDF page size** (A4 or US Letter) first.
 - **Import drawdown from image...**: works out a draft from a picture of a drawdown, one pixel per cell (dark pixel = warp up; the left column is the last end; transparent counts as white; images larger than 400 x 400 are refused). Ends with identical columns share a shaft, and picks with identical rows share a treadle; more than 32 different picks gives a liftplan, and more than 32 different ends is an error. Your palette and shed direction are kept. It replaces the draft in one undo step.
 - **Print...**: makes a printable PDF and opens it in your PDF viewer, which has the Print command and printer choice. Nothing is sent to a printer directly.
@@ -158,6 +164,16 @@ The float shading is a view only: it does not change the draft or the undo histo
 
 How yardage is worked out: the loom width is the finished width divided by (1 - width shrinkage), and likewise for length, because finishing shrinks the cloth. Ends = loom width x ends per unit; picks = loom length x picks per unit. Each warp end is the loom length plus warp take-up, plus the loom waste; each weft pick is the loom width plus weft draw-in. Treat the result as a careful estimate and add a margin for sampling and mistakes.
 
+### View menu, shortcuts and help
+
+- **View**: Drawdown or Cloth (Ctrl+K switches), zoom in and out (Ctrl++, Ctrl+-) and back to the standard zoom (Ctrl+0).
+- **Edit > Select all** (Ctrl+A) selects the whole panel you last clicked in; **Esc** drops the selection. While the draft has focus, **P**, **L** and **S** pick the pencil, line and select tools (the letters are left alone in the number boxes).
+- **Help > Keyboard shortcuts** (F1) lists every shortcut; **Help > About** shows the version. Hover over a toolbar button for a tip.
+
+### Remembered settings
+
+Zoom, drawdown or cloth view, yarn width, float limit and which floats to show, PDF page size, the yardage window's entries, the window's size and position, the recent files and the last folder you used are saved when you quit and restored next time. They live in `settings.json` in `%APPDATA%\WeaveGenerator` (on other systems `~/.config/weavegen`). Delete that file to go back to the defaults. A damaged file is ignored, and a window position that would be off the screen (a monitor you have unplugged) is replaced by the default.
+
 ### Toolbar
 
 - **Ends / Picks / Shafts / Treadles + Apply**: resize the draft, keeping everything that still fits. Ends threaded on a removed shaft become unthreaded.
@@ -174,6 +190,8 @@ How yardage is worked out: the loom width is the finished width divided by (1 - 
 ```text
 weave_generator.py     launcher (kept for `python weave_generator.py` and PyInstaller)
 weavegen/
+  settings.py          remembered preferences (JSON file), recent files
+  assets/              the application icon (made by tools/make_icon.py)
   core/                toolkit-independent logic (no Tkinter imports)
     draft.py           Draft: threading, tie-up, treadling/liftplan, palette and thread colours, computed drawdown, resize
     history.py         History: undo/redo over draft snapshots
@@ -200,7 +218,11 @@ weavegen/
   ui/
     app.py             Tkinter window, canvas, tools, menus, mouse and toolbar handlers
     dialogs.py         the block substitution, combine and network drafting windows
+    help.py            keyboard shortcut list, About text, locating bundled files
+    tooltip.py         hover tips
     yardage_dialog.py  the yardage calculator window
+tools/make_icon.py     draws the icon files
+weave_generator.spec   PyInstaller recipe for the Windows .exe
 tests/                 pytest suite: core logic, export, and UI driven with synthetic events
                        (UI tests skip themselves when no display is available)
 ```
@@ -225,13 +247,15 @@ python -m weavegen
    pip install pyinstaller
    ```
 
-2. Run PyInstaller from the project directory:
+2. Run PyInstaller from the project directory, using the recipe in the project:
 
    ```bash
-   pyinstaller --onefile --windowed weave_generator.py
+   pyinstaller weave_generator.spec
    ```
 
-3. The executable is `dist\weave_generator.exe`. Other Windows users do not need Python installed.
+3. The program is `dist\WeaveGenerator.exe`: one file, no console window, with the application icon. Other Windows users do not need Python installed. It stores its settings in `%APPDATA%\WeaveGenerator`, the same as when run from source.
+
+The recipe leaves out libraries the program does not use, which keeps the file at about 27 MB. The `build` and `dist` folders are not kept in git.
 
 ---
 

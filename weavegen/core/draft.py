@@ -52,6 +52,14 @@ class DraftState:
     warp_colors: np.ndarray
     weft_colors: np.ndarray
 
+    def fingerprint(self) -> tuple:
+        """A value that is equal for two states exactly when they hold the same draft, so
+        "has this changed since it was saved?" is a plain comparison."""
+        arrays = (self.threading, self.tieup, self.treadling, self.liftplan,
+                  self.warp_colors, self.weft_colors)
+        return (tuple((a.shape, a.dtype.str, a.tobytes()) for a in arrays),
+                self.rising, self.liftplan_mode, tuple(self.palette))
+
 
 def _check_color(color: str) -> str:
     if not isinstance(color, str) or not _HEX_COLOR.match(color):
