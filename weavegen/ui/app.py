@@ -29,7 +29,7 @@ from weavegen.core.selection import Rect, display_axis, display_shift_to_matrix,
 from weavegen.io import wif
 from weavegen.io.drawdown_image import drawdown_from_image
 from weavegen.io.pdf import PAGE_SIZES, save_pdf
-from weavegen.io.png import render_draft_image
+from weavegen.io.png import render_draft_image, render_weave_image
 from weavegen.settings import Settings
 from weavegen.io.svg import save_svg
 from weavegen.ui.dialogs import BlockSubstitutionDialog, CombineDialog, NetworkDialog, ToolDialog
@@ -184,7 +184,8 @@ class WeaveGeneratorApp:
 
         export_button = tk.Button(tool_bar, text="Export PNG", command=self.on_export)
         export_button.pack(side=tk.RIGHT)
-        Tooltip(export_button, "Save the whole draft as a PNG picture (File menu has SVG and PDF)")
+        Tooltip(export_button, "Save just the woven cloth as a PNG picture "
+                               "(the File menu also has the full draft, SVG and PDF)")
         Tooltip(self.undo_button, "Undo (Ctrl+Z)")
         Tooltip(self.redo_button, "Redo (Ctrl+Y)")
 
@@ -253,7 +254,8 @@ class WeaveGeneratorApp:
         file_menu.add_command(label="Save as WIF...", accelerator="Ctrl+Shift+S", command=self.on_save_as)
         file_menu.add_command(label="Import drawdown from image...", command=self.on_import_image)
         file_menu.add_separator()
-        file_menu.add_command(label="Export PNG...", command=self.on_export)
+        file_menu.add_command(label="Export PNG (weave only)...", command=self.on_export)
+        file_menu.add_command(label="Export PNG (full draft)...", command=self.on_export_full)
         file_menu.add_command(label="Export SVG...", command=self.on_export_svg)
         file_menu.add_command(label="Export PDF...", command=self.on_export_pdf)
         file_menu.add_command(label="Print...", accelerator="Ctrl+P", command=self.on_print)
@@ -1399,21 +1401,30 @@ class WeaveGeneratorApp:
         self.print_draft()
 
     def on_export(self) -> None:
+        """Save only the woven cloth (as shown by the current view), without the editing panels."""
+        self._export_png("Save weave as PNG", self._default_name(".png"), render_weave_image, "Weave")
+
+    def on_export_full(self) -> None:
+        """Save the whole draft: threading, tie-up, treadling, colour strips and drawdown."""
+        stem = Path(self._default_name(".png")).stem
+        self._export_png("Save full draft as PNG", f"{stem}_full.png", render_draft_image, "Full draft")
+
+    def _export_png(self, title: str, initial: str, render, what: str) -> None:
         path = filedialog.asksaveasfilename(
-            title="Save draft as PNG",
+            title=title,
             defaultextension=".png",
             filetypes=[("PNG Image", "*.png")],
-            initialfile=self._default_name(".png"),
+            initialfile=initial,
             **self._dialog_dir(),
         )
         if not path:
             return
         try:
-            render_draft_image(self.draft, cloth_thickness=self._cloth_thickness()).save(path, format="PNG")
+            render(self.draft, cloth_thickness=self._cloth_thickness()).save(path, format="PNG")
         except Exception as exc:
             messagebox.showerror("Export failed", f"Could not save PNG.\n\n{exc}")
             return
-        messagebox.showinfo("Saved", f"Draft saved to:\n{path}")
+        messagebox.showinfo("Saved", f"{what} saved to:\n{path}")
 
     # -----------------
     # App lifecycle

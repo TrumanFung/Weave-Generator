@@ -146,3 +146,16 @@ def test_a_highlight_of_the_wrong_shape_is_refused():
 def test_the_tint_is_a_strong_red():
     r, g, b = FLOAT_TINT
     assert r > 200 and g < 60
+
+
+# ---- weave-only PNG ----
+
+def test_weave_image_is_only_the_drawdown_without_grid_lines():
+    from weavegen.io.png import render_weave_image
+    d = Draft.twill_2_2(ends=12, picks=8)
+    d.set_palette_color(0, "#ff0000")
+    d.set_palette_color(1, "#0000ff")
+    img = render_weave_image(d, cell=10)
+    assert img.size == (12 * 10, 8 * 10)                       # exactly ends x picks cells
+    assert {c for _, c in img.getcolors(maxcolors=100000)} == {(255, 0, 0), (0, 0, 255)}   # no grid, no ink/paper
+    assert render_weave_image(d, cell=10, cloth_thickness=0.85).size == img.size
