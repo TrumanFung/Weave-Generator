@@ -37,7 +37,10 @@ from weavegen.ui.help import ShortcutsWindow, about_text, asset_path
 from weavegen.ui.tooltip import Tooltip
 from weavegen.ui.yardage_dialog import YardageDialog
 
-TOOLS = (("pencil", "Pencil"), ("line", "Line"), ("select", "Select"))
+TOOLS = (("pencil", "Pencil"), ("line", "Line"), ("curve", "Curve"), ("select", "Select"))
+
+# Tk event-state bits for Control and Alt (Mod1 on most systems, 0x20000 on Windows).
+CONTROL_ALT_MASK = 0x4 | 0x8 | 0x20000
 
 SEQUENCE_LABELS = (
     ("straight", "Straight draw"),
@@ -74,6 +77,16 @@ class _Stroke:
     last: Hit | None = None  # the previous cell of a pencil drag, so fast drags leave no gaps
 
 
+@dataclass
+class _Curve:
+    """A curve whose two ends are chosen and whose bend is still being placed."""
+
+    panel: str
+    start: Hit
+    end: Hit
+    paint: bool
+
+
 class WeaveGeneratorApp:
     ZOOM_MIN = 4
     ZOOM_MAX = 40
@@ -106,6 +119,7 @@ class WeaveGeneratorApp:
 
         self.layout: DraftLayout = DraftLayout.build(self.draft, self.zoom)
         self._stroke: _Stroke | None = None
+        self._curve: _Curve | None = None  # a curve waiting for its bend to be placed
         self._photos: dict[str, ImageTk.PhotoImage] = {}  # keep references or Tk drops the images
         self._image_items: dict[str, int] = {}
 
@@ -360,15 +374,17 @@ class WeaveGeneratorApp:
         self.root.bind("<Control-q>", lambda _e: self.on_quit())
         self.root.bind("<Control-k>", lambda _e: self.on_toggle_view())
         self.root.bind("<F1>", lambda _e: self.on_shortcuts())
-        self.root.bind("<Escape>", lambda _e: self.clear_selection())
+        self.root.bind("<Escape>", lambda _e: self.on_escape())
         for sequence in ("<Control-plus>", "<Control-equal>", "<Control-KP_Add>"):
             self.root.bind(sequence, lambda _e: self.change_zoom(2))
         for sequence in ("<Control-minus>", "<Control-KP_Subtract>"):
             self.root.bind(sequence, lambda _e: self.change_zoom(-2))
         self.root.bind("<Control-0>", lambda _e: self.reset_zoom())
         # Letters and Ctrl+A only act while the draft has focus, so the number boxes still take typing.
-        for key, tool in (("p", "pencil"), ("l", "line"), ("s", "select")):
-            c.bind(f"<KeyPress-{key}>", lambda _e, t=tool: self.set_tool(t))
+        # (Ctrl+S and friends also reach the draft, so a key with Control or Alt held is not a tool key.)
+        for key, tool in (("p", "pencil"), ("l", "line"), ("c", "curve"), ("s", "select")):
+            c.bind(f"<KeyPress-{key}>",
+                   lambda e, t=tool: None if e.state & CONTROL_ALT_MASK else self.set_tool(t))
         c.bind("<Control-a>", lambda _e: self.on_select_all())
         # Clipboard keys only act while the draft has focus, so text fields keep their own copy/paste.
         for sequence, handler in (("<Control-c>", self.on_copy), ("<Control-x>", self.on_cut),
@@ -391,6 +407,7 @@ class WeaveGeneratorApp:
         c = self.canvas
         c.delete("all")
         self._image_items.clear()
+        self._curve = None  # a curve in progress belongs to the layout it was started in
 
         shown = ["threading", "drawdown", "warp", "weft",
                  "liftplan" if self.draft.liftplan_mode else "treadling"]
@@ -563,14 +580,73 @@ class WeaveGeneratorApp:
         hints = {
             "pencil": "Click or drag to set or clear cells; in the colour strips it paints the selected colour.",
             "line": "Drag to draw a straight line.",
+            "curve": "Drag from one end of the curve to the other, then move the pointer to bend it and click.",
             "select": "Drag to select cells, then use the Edit menu (copy, flip, repeat...).",
         }
+        self._cancel_curve()
         self.tool_hint.configure(text=hints[self.tool_var.get()])
 
     def set_tool(self, tool: str) -> None:
         if tool in dict(TOOLS):
             self.tool_var.set(tool)
             self._on_tool_changed()
+
+    # ---- the curve tool: drag the two ends, then place the bend ----
+    def _begin_curve(self, stroke: _Stroke) -> None:
+        if (stroke.start.a, stroke.start.b) == (stroke.end.a, stroke.end.b):
+            self._set_status("Drag from one end of the curve to the other.")
+            return
+        self._curve = _Curve(stroke.panel, stroke.start, stroke.end, stroke.paint)
+        self._set_status("Now move the pointer to bend the curve and click to place it. Esc cancels.")
+
+    def _draw_curve_preview(self, curve: _Curve, through: Hit) -> None:
+        self.canvas.delete("preview")
+        points: list[float] = []
+        for a, b in ops.curve_cells((curve.start.a, curve.start.b), (curve.end.a, curve.end.b),
+                                    (through.a, through.b)):
+            x, y = self._cell_center(curve.panel, Hit(curve.panel, a, b))
+            points += [x, y]
+        if len(points) >= 4:
+            self.canvas.create_line(*points, fill=HIGHLIGHT, width=2, tags="preview")
+        x, y = self._cell_center(curve.panel, through)
+        self.canvas.create_oval(x - 4, y - 4, x + 4, y + 4, outline=HIGHLIGHT, width=2, tags="preview")
+
+    def _cancel_curve(self, message: str | None = None) -> None:
+        if self._curve is not None:
+            self._curve = None
+            self.canvas.delete("preview")
+            if message:
+                self._set_status(message)
+
+    def _finish_curve(self, hit: Hit | None) -> None:
+        """The click that places the bend: draw the curve through it as one undo step."""
+        curve = self._curve
+        if curve is None:
+            return
+        if hit is None or hit.panel != curve.panel:
+            self._cancel_curve(f"Curve cancelled: click inside the {curve.panel} to place the bend.")
+            return
+        before = self.draft.snapshot()
+        try:
+            changed = ops.draw_curve(
+                self.draft, curve.panel, (curve.start.a, curve.start.b), (curve.end.a, curve.end.b),
+                (hit.a, hit.b), curve.paint,
+                value=self.active_color if curve.panel in COLOR_PANELS else 1)
+        except (ValueError, IndexError) as exc:
+            self._cancel_curve()
+            self._error(str(exc))
+            return
+        self._cancel_curve()
+        if changed:
+            self.history.record(before)
+            self._refresh_images()
+            self._sync_controls()
+
+    def on_escape(self) -> None:
+        if self._curve is not None:
+            self._cancel_curve("Curve cancelled.")
+        else:
+            self.clear_selection()
 
     def clear_selection(self) -> None:
         if self.selection is not None:
@@ -632,6 +708,9 @@ class WeaveGeneratorApp:
     def on_press(self, event: tk.Event) -> None:
         self.canvas.focus_set()
         hit = self.layout.hit(*self._canvas_xy(event))
+        if self._curve is not None:       # this click places the bend of the curve being drawn
+            self._finish_curve(hit)
+            return
         if hit is None or hit.panel == "drawdown":  # the drawdown is derived, not edited
             return
         self.active_panel = hit.panel
@@ -646,7 +725,7 @@ class WeaveGeneratorApp:
         elif tool == "select":
             self.selection = (hit.panel, Rect.spanning((hit.a, hit.b), (hit.a, hit.b)))
             self._draw_selection()
-        # The line tool waits for the drag and release.
+        # The line and curve tools wait for the drag and release.
 
     def on_drag(self, event: tk.Event) -> None:
         stroke = self._stroke
@@ -691,12 +770,21 @@ class WeaveGeneratorApp:
             except (ValueError, IndexError) as exc:
                 self._error(str(exc))
                 return
+        if stroke.tool == "curve":
+            self._begin_curve(stroke)
+            return
         if stroke.changed:
             self.history.record(stroke.before)
             self._sync_controls()
 
     def on_hover(self, event: tk.Event) -> None:
         hit = self.layout.hit(*self._canvas_xy(event))
+        curve = self._curve
+        if curve is not None:             # while a curve waits for its bend, the pointer shapes it
+            if hit is not None and hit.panel == curve.panel:
+                self._draw_curve_preview(curve, hit)
+            self._set_status("Move the pointer to bend the curve, then click to place it. Esc cancels.")
+            return
         if hit is None:
             self._set_status("")
             return

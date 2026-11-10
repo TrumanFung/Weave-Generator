@@ -235,3 +235,104 @@ def test_draw_line_rejects_points_outside_the_panel():
     with pytest.raises(IndexError):
         ops.draw_line(d, "tieup", (0, 0), (9, 0), paint=True)
     assert (d.tieup == before.tieup).all()
+
+
+# ---- curve tool ----
+CURVES = [((0, 0), (9, 9), (0, 9)), ((5, 0), (5, 9), (0, 4)), ((9, 0), (0, 0), (4, 6)),
+          ((0, 0), (0, 12), (3, 6)), ((3, 3), (3, 4), (8, 3)), ((0, 5), (10, 5), (5, 0))]
+
+
+@pytest.mark.parametrize("start,end,through", CURVES)
+def test_curve_cells_run_from_start_to_end_without_gaps(start, end, through):
+    cells = ops.curve_cells(start, end, through)
+    assert cells[0] == start and cells[-1] == end
+    for (r0, c0), (r1, c1) in zip(cells, cells[1:]):
+        assert (r0, c0) != (r1, c1) and max(abs(r1 - r0), abs(c1 - c0)) == 1
+
+
+@pytest.mark.parametrize("start,end,through", CURVES)
+def test_the_curve_passes_through_the_chosen_point(start, end, through):
+    cells = ops.curve_cells(start, end, through)
+    assert min(max(abs(r - through[0]), abs(c - through[1])) for r, c in cells) <= 1
+
+
+def test_a_point_on_the_chord_gives_a_straight_line():
+    cells = ops.curve_cells((0, 0), (8, 4), (4, 2))
+    for r, c in cells:
+        assert abs(c - r / 2) <= 1          # within a cell of the straight line c = r / 2
+    assert len(cells) >= 9
+
+
+def test_a_degenerate_curve_is_one_cell():
+    assert ops.curve_cells((3, 3), (3, 3), (3, 3)) == [(3, 3)]
+
+
+def test_the_curve_is_symmetric_about_its_middle():
+    cells = ops.curve_cells((0, 0), (0, 10), (6, 5))
+    for r, c in cells:        # each cell's mirror image is on the curve, give or take rounding
+        assert min(max(abs(r - r2), abs(10 - c - c2)) for r2, c2 in cells) <= 1
+
+
+def test_curve_cells_bend_toward_the_chosen_point():
+    low = ops.curve_cells((0, 0), (0, 10), (2, 5))
+    high = ops.curve_cells((0, 0), (0, 10), (6, 5))
+    assert max(r for r, _ in high) > max(r for r, _ in low) >= 1
+
+
+def test_draw_curve_paints_and_erases_in_the_tieup():
+    d = Draft(ends=4, picks=4, shafts=10, treadles=10)
+    assert ops.draw_curve(d, "tieup", (0, 0), (9, 9), (0, 9), paint=True)
+    painted = {(int(r), int(c)) for r, c in zip(*np.nonzero(d.tieup))}
+    assert (0, 0) in painted and (9, 9) in painted and len(painted) >= 10
+    assert all(0 <= r < 10 and 0 <= c < 10 for r, c in painted)
+    assert ops.draw_curve(d, "tieup", (0, 0), (9, 9), (0, 9), paint=False)
+    assert not d.tieup.any()
+
+
+def test_draw_curve_in_threading_threads_one_shaft_per_end():
+    d = Draft(ends=12, picks=4, shafts=8, treadles=4)
+    assert ops.draw_curve(d, "threading", (0, 0), (11, 0), (5, 7), paint=True)
+    assert (d.matrix("threading").sum(axis=1) == 1).all()           # every end threaded exactly once
+    shafts = [int(s) for s in d.threading]
+    assert shafts[0] == 0 and shafts[-1] == 0 and max(shafts) >= 6   # up and back down
+    assert shafts[5] >= 6 or shafts[6] >= 6
+
+
+def test_draw_curve_in_threading_averages_where_it_doubles_back_over_one_end():
+    d = Draft(ends=4, picks=4, shafts=10, treadles=4)
+    ops.draw_curve(d, "threading", (1, 0), (1, 9), (1, 4), paint=True)    # straight up one end
+    assert d.threading[1] in range(0, 10) and d.matrix("threading")[1].sum() == 1
+
+
+def test_a_curve_that_swings_out_of_the_panel_is_flattened_against_its_edge():
+    d = Draft(ends=4, picks=4, shafts=10, treadles=10)
+    assert ops.draw_curve(d, "tieup", (0, 0), (9, 9), (0, 9), paint=True)   # the true curve leaves the panel
+    painted = {(int(r), int(c)) for r, c in zip(*np.nonzero(d.tieup))}
+    assert {(0, 0), (9, 9), (0, 9)} <= painted
+    assert any(r == 0 for r, c in painted if 3 < c < 9)                    # it runs along the top edge
+    d2 = Draft(ends=12, picks=4, shafts=10, treadles=4)
+    assert ops.draw_curve(d2, "threading", (0, 0), (11, 9), (0, 9), paint=True)
+    assert (d2.matrix("threading").sum(axis=1) == 1).all()
+
+
+def test_draw_curve_rejects_points_outside_the_panel_and_changes_nothing():
+    d = Draft(ends=4, picks=4, shafts=4, treadles=4)
+    for start, end, through in (((0, 0), (3, 3), (4, 0)), ((0, 0), (9, 3), (1, 1)), ((-1, 0), (3, 3), (1, 1))):
+        with pytest.raises(IndexError):
+            ops.draw_curve(d, "tieup", start, end, through, paint=True)
+    assert not d.tieup.any()
+
+
+def test_draw_curve_paints_the_chosen_colour_in_a_strip():
+    d = Draft(ends=8, picks=4, shafts=4, treadles=4)
+    d.add_palette_color("#ff0000")
+    assert ops.draw_curve(d, "warp", (1, 0), (6, 0), (3, 0), paint=True, value=2)
+    assert list(d.warp_colors[1:7]) == [2] * 6 and d.warp_colors[0] != 2
+    assert ops.draw_curve(d, "warp", (1, 0), (6, 0), (3, 0), paint=False)
+    assert 2 not in list(d.warp_colors)
+
+
+def test_a_curve_changes_nothing_when_every_cell_already_matches():
+    d = Draft(ends=4, picks=4, shafts=10, treadles=10)
+    ops.draw_curve(d, "tieup", (0, 0), (9, 9), (2, 7), paint=True)
+    assert ops.draw_curve(d, "tieup", (0, 0), (9, 9), (2, 7), paint=True) is False

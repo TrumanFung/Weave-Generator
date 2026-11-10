@@ -30,6 +30,7 @@ SHORTCUTS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     ("Tools (while the draft has focus)", (
         ("P", "Pencil"),
         ("L", "Line"),
+        ("C", "Curve: drag the two ends, move to bend, click to place (Esc cancels)"),
         ("S", "Select"),
     )),
     ("View", (
