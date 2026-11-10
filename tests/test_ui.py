@@ -1764,3 +1764,171 @@ def test_tooltips_appear_on_hover_and_vanish_on_leave(app):
     app.undo_button.event_generate("<Leave>")
     app.root.update()
     assert not tip.visible
+
+
+# ---- curve tool ----
+def big_tieup(app):
+    app.draft.resize(shafts=10, treadles=10)
+    app.draft.clear()                      # an empty draft, so every mark on screen is the curve's
+    app._rebuild()
+    app.set_tool("curve")
+
+
+def hover(app, panel, a, b):
+    app.on_hover(at(app, panel, a, b))
+
+
+def test_the_curve_tool_is_offered_with_a_hint_and_a_key(app):
+    assert "curve" in dict(app_module.TOOLS)
+    app.root.deiconify()
+    app.root.update()
+    key(app, app.canvas, "<KeyPress-c>")
+    assert app.tool_var.get() == "curve" and "bend" in app.tool_hint.cget("text")
+
+
+def test_tool_keys_ignore_ctrl_combinations(app, monkeypatch):
+    app.root.deiconify()
+    app.root.update()
+    saved = []
+    monkeypatch.setattr(app, "on_save", lambda: saved.append(1))
+    app._bind_events()
+    for sequence in ("<Control-s>", "<Control-c>", "<Control-l>", "<Control-p>"):
+        app.set_tool("pencil")
+        key(app, app.canvas, sequence)
+        assert app.tool_var.get() == "pencil", sequence
+    assert saved == [1]
+
+
+def test_drag_the_ends_then_click_to_place_the_bend(app):
+    big_tieup(app)
+    press(app, "tieup", 0, 0)
+    drag_to(app, "tieup", 9, 9)
+    release(app, "tieup", 9, 9)
+    assert app._curve is not None
+    assert undo_depth(app) == 0 and not app.draft.tieup.any()          # nothing drawn yet
+    assert "bend" in app.status.cget("text")
+    hover(app, "tieup", 2, 7)
+    assert app.canvas.find_withtag("preview")                          # the pointer shows the curve
+    press(app, "tieup", 2, 7)
+    release(app, "tieup", 2, 7)
+    assert app._curve is None and not app.canvas.find_withtag("preview")
+    assert app.draft.tieup[0, 0] and app.draft.tieup[9, 9] and app.draft.tieup.sum() > 10
+    assert undo_depth(app) == 1
+    app.on_undo()
+    assert not app.draft.tieup.any()
+
+
+def test_the_curve_follows_the_pointer_not_the_first_hover(app):
+    big_tieup(app)
+    stroke(app, "tieup", (0, 0), (0, 9))
+    hover(app, "tieup", 1, 4)
+    hover(app, "tieup", 7, 4)
+    press(app, "tieup", 7, 4)
+    release(app, "tieup", 7, 4)
+    assert max(int(r) for r, c in zip(*app.draft.tieup.nonzero())) >= 6
+
+
+def test_a_curve_on_set_cells_erases_them(app):
+    big_tieup(app)
+    stroke(app, "tieup", (0, 0), (9, 9))      # pending
+    press(app, "tieup", 0, 9)
+    release(app, "tieup", 0, 9)
+    assert app.draft.tieup.any()
+    start_cells = app.draft.tieup.copy()
+    stroke(app, "tieup", (0, 0), (9, 9))      # starts on a set cell: erases
+    press(app, "tieup", 0, 9)
+    release(app, "tieup", 0, 9)
+    assert not (app.draft.tieup & start_cells).any() and undo_depth(app) == 2
+
+
+def test_escape_cancels_a_curve_in_progress(app):
+    big_tieup(app)
+    app.root.deiconify()
+    app.root.update()
+    stroke(app, "tieup", (0, 0), (9, 9))
+    hover(app, "tieup", 3, 6)
+    app.selection = ("tieup", app_module.Rect(0, 1, 0, 1))
+    key(app, app.root, "<Escape>")
+    assert app._curve is None and not app.canvas.find_withtag("preview")
+    assert app.selection is not None                                    # the first Esc only cancelled the curve
+    assert "cancelled" in app.status.cget("text") and undo_depth(app) == 0 and not app.draft.tieup.any()
+    key(app, app.root, "<Escape>")
+    assert app.selection is None
+
+
+def test_clicking_outside_the_panel_or_in_another_one_cancels(app):
+    big_tieup(app)
+    stroke(app, "tieup", (0, 0), (9, 9))
+    press(app, "threading", 0, 0)
+    assert app._curve is None and not app.draft.tieup.any() and "cancelled" in app.status.cget("text")
+    assert undo_depth(app) == 0 and app.draft.threading[0] == -1          # the click did not also edit
+    stroke(app, "tieup", (0, 0), (9, 9))
+    app.on_press(types.SimpleNamespace(x=-50, y=-50))
+    assert app._curve is None and undo_depth(app) == 0
+
+
+def test_a_single_click_with_the_curve_tool_starts_nothing(app):
+    big_tieup(app)
+    stroke(app, "tieup", (2, 2), (2, 2))
+    assert app._curve is None and "one end" in app.status.cget("text") and undo_depth(app) == 0
+
+
+def test_changing_tool_or_size_drops_the_curve_in_progress(app):
+    big_tieup(app)
+    stroke(app, "tieup", (0, 0), (9, 9))
+    app.set_tool("pencil")
+    assert app._curve is None
+    app.set_tool("curve")
+    stroke(app, "tieup", (0, 0), (9, 9))
+    app.draft.resize(ends=20)
+    app._rebuild()
+    assert app._curve is None
+
+
+def test_moving_the_pointer_over_another_panel_keeps_the_last_preview(app):
+    big_tieup(app)
+    stroke(app, "tieup", (0, 0), (9, 9))
+    hover(app, "tieup", 2, 7)
+    shown = len(app.canvas.find_withtag("preview"))
+    hover(app, "threading", 0, 0)
+    assert len(app.canvas.find_withtag("preview")) == shown and app._curve is not None
+
+
+def test_a_curve_in_the_threading_threads_every_end_it_crosses_once(app):
+    app.draft.resize(ends=24, shafts=8)
+    app.draft.clear()
+    app._rebuild()
+    app.set_tool("curve")
+    stroke(app, "threading", (0, 0), (23, 0))
+    press(app, "threading", 11, 7)
+    release(app, "threading", 11, 7)
+    threading = [int(s) for s in app.draft.threading]
+    assert threading[0] == 0 and threading[-1] == 0 and max(threading) >= 6
+    assert (app.draft.matrix("threading").sum(axis=1) == 1).all() and undo_depth(app) == 1
+
+
+def test_a_curve_in_the_warp_strip_paints_the_selected_colour(app):
+    app.add_color("#ff0000")
+    app.select_color(2)
+    app.set_tool("curve")
+    stroke(app, "warp", (1, 0), (8, 0))
+    press(app, "warp", 4, 0)
+    release(app, "warp", 4, 0)
+    assert list(app.draft.warp_colors[1:9]) == [2] * 8
+
+
+def test_a_curve_error_is_reported_and_the_draft_is_untouched(app, monkeypatch):
+    big_tieup(app)
+    stroke(app, "tieup", (0, 0), (9, 9))
+
+    def boom(*a, **k):
+        raise ValueError("no curve today")
+    monkeypatch.setattr(app_module.ops, "draw_curve", boom)
+    press(app, "tieup", 2, 7)
+    assert app.errors and "no curve today" in app.errors[-1]
+    assert app._curve is None and undo_depth(app) == 0 and not app.draft.tieup.any()
+
+
+def test_curve_is_in_the_shortcut_help():
+    from weavegen.ui import help as help_module
+    assert "Curve" in help_module.shortcuts_text()

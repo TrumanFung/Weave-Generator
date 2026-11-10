@@ -170,3 +170,74 @@ def draw_line(draft: Draft, panel: str, start: tuple[int, int], end: tuple[int, 
         for r, c in line_cells(start, end):
             matrix[r, c] = fill
     return draft.set_matrix(panel, matrix)
+
+
+def _curve_samples(start: tuple[int, int], end: tuple[int, int],
+                   through: tuple[int, int]) -> list[tuple[float, float]]:
+    """Points along the quadratic Bezier from ``start`` to ``end`` whose middle (t = 1/2) is
+    ``through``, several per cell, starting and finishing exactly on the end cells."""
+    (r0, c0), (r1, c1), (rm, cm) = start, end, through
+    rc, cc = 2 * rm - (r0 + r1) / 2, 2 * cm - (c0 + c1) / 2     # the Bezier control point
+    length = math.hypot(rc - r0, cc - c0) + math.hypot(r1 - rc, c1 - cc)
+    count = int(length * 4) + 16
+    points = [(float(r0), float(c0))]
+    for i in range(1, count):
+        t = i / count
+        a, b, c = (1 - t) ** 2, 2 * (1 - t) * t, t * t
+        points.append((a * r0 + b * rc + c * r1, a * c0 + b * cc + c * c1))
+    points.append((float(r1), float(c1)))
+    return points
+
+
+def curve_cells(start: tuple[int, int], end: tuple[int, int],
+                through: tuple[int, int]) -> list[tuple[int, int]]:
+    """Cells on the smooth curve from ``start`` to ``end`` that bends to pass through ``through``.
+
+    The curve is a quadratic Bezier whose middle lies on ``through``, so dragging that point drags
+    the middle of the curve. Cells run from ``start`` to ``end`` with no gaps, and may lie outside
+    any panel: callers clip them. A ``through`` point on the straight line between the ends gives a
+    straight line.
+    """
+    cells = [start]
+    for r, c in _curve_samples(start, end, through)[1:]:
+        cell = (math.floor(r + 0.5), math.floor(c + 0.5))
+        if cell != cells[-1]:
+            cells.append(cell)
+    if cells[-1] != end:
+        cells.append(end)
+    return cells
+
+
+def draw_curve(draft: Draft, panel: str, start: tuple[int, int], end: tuple[int, int],
+               through: tuple[int, int], paint: bool, value: int = 1) -> bool:
+    """Set (``paint``) or clear the cells along a curve (see ``curve_cells``).
+
+    The three points must lie inside the panel. A stretch of the curve that swings outside the
+    panel is flattened against its edge. In the threading each end the curve crosses is threaded
+    on the shaft the curve passes through at that end (so a steep curve still threads every end
+    once); ends the curve only reaches outside the panel are left alone. In a colour strip
+    ``value`` is the palette index to paint; clearing returns cells to the default thread colour.
+    """
+    matrix = draft.matrix(panel)
+    rows, cols = matrix.shape
+    for r, c in (start, end, through):
+        if not (0 <= r < rows and 0 <= c < cols):
+            raise IndexError(f"({r}, {c}) is outside the {panel} panel")
+
+    if panel == "threading":
+        nearest: dict[int, tuple[float, int]] = {}      # end -> (distance of the sample, its shaft)
+        for r, c in _curve_samples(start, end, through):
+            end_index = math.floor(r + 0.5)
+            if 0 <= end_index < rows:
+                distance = abs(r - end_index)
+                if end_index not in nearest or distance < nearest[end_index][0]:
+                    nearest[end_index] = (distance, min(cols - 1, max(0, math.floor(c + 0.5))))
+        for end_index, (_distance, shaft) in nearest.items():
+            matrix[end_index, :] = False
+            if paint:
+                matrix[end_index, shaft] = True
+    else:
+        fill = value if paint else draft.clear_value(panel)
+        for r, c in curve_cells(start, end, through):
+            matrix[min(rows - 1, max(0, r)), min(cols - 1, max(0, c))] = fill
+    return draft.set_matrix(panel, matrix)

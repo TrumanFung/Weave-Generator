@@ -13,7 +13,7 @@ You can:
 - Use several **treadles per pick**, or switch to a direct **liftplan**
 - Choose a **rising** or **sinking** shed
 - Set up to **400 ends**, **400 picks**, **32 shafts** and **32 treadles**
-- Draw with **pencil**, **line** and **select** tools; **cut, copy, paste, flip, rotate, repeat** and **wrap** selections
+- Draw with **pencil**, **line**, **curve** and **select** tools; **cut, copy, paste, flip, rotate, repeat** and **wrap** selections
 - **Generate** threadings and treadlings (straight, point, advancing, skip) and tie-ups (plain, twill, satin), or start from a **preset** (plain weave, twills, herringbone, diamond, satins)
 - **Undo / redo** every edit (Ctrl+Z, Ctrl+Y)
 - **Zoom** and scroll large drafts
@@ -92,6 +92,7 @@ Choose a tool in the **Tool** row:
 
 - **Pencil**: click or drag to set or clear cells (the behavior above). In a colour strip it paints the selected colour. Fast drags are filled in so no cells are skipped.
 - **Line**: drag to draw a straight line. Starting on a set cell erases the line instead. In the threading the line threads each end it crosses on the shaft it passes through.
+- **Curve**: a smooth curve in two steps. First drag from one end of the curve to the other (the chord). Then move the pointer: a red preview curve bends so that its middle passes through the pointer, and a small circle marks that point. Click to place it (one undo step). A click on the chord's own line gives a straight line. **Esc**, choosing another tool, clicking outside the panel or in another panel, or resizing the draft cancels it without drawing anything, and a plain click without dragging starts nothing. Like the line tool, starting on a set cell erases the curve instead, in a colour strip it paints the selected colour, and in the threading it threads each end the curve crosses on the shaft the curve passes through there, so a steep curve still threads every end once. Any stretch that would swing outside the panel is flattened against its edge. It is handy for threading arcs, tie-up shapes and colour gradients.
 - **Select**: drag a rectangle inside one panel; it shows as a dashed outline. Clicking a single cell selects just that cell, which is also how you choose where to paste.
 
 ### Edit menu (works on the selection)
@@ -135,7 +136,7 @@ These open a window with the options, a live **Result** line (green when the dra
 ### Colours and cloth
 
 - The **Colours** row holds your palette. Click a swatch to select it; **Add**, **Edit** and **Remove** change the palette (Edit recolours every thread that uses the colour, Remove reassigns threads to a neighbouring colour; at least one colour always stays). There is no limit on the number of colours.
-- The strip above the threading colours the **warp ends**, and the strip to the right of the treadling colours the **weft picks**. Paint them with the pencil or line tool, and use Select, Copy, Paste, Flip, Repeat, Wrap and Delete on them like any other panel. Delete restores the default thread colour.
+- The strip above the threading colours the **warp ends**, and the strip to the right of the treadling colours the **weft picks**. Paint them with the pencil, line or curve tool, and use Select, Copy, Paste, Flip, Repeat, Wrap and Delete on them like any other panel. Delete restores the default thread colour.
 - **Draft > Colour stripes** colours the whole warp or weft from a repeating sequence of `colour:threads` pairs, for example `1:4, 2:2` is four threads of colour 1 then two of colour 2 (colours are numbered on the swatches).
 - The **drawdown** shows each cell in the colour of the thread that is on top: the end's colour where the warp is up, the pick's colour where the weft is.
 - The **View** buttons (Drawdown / Cloth): **Cloth** draws rounded, shaded yarns with the lower thread shadowed where it passes under, so floats and colour effects look like woven cloth. **Yarn width %** sets how much of each cell the yarn fills (30 to 100). This is a display choice only: it is not an undo step and never changes the draft.
@@ -167,7 +168,7 @@ How yardage is worked out: the loom width is the finished width divided by (1 - 
 ### View menu, shortcuts and help
 
 - **View**: Drawdown or Cloth (Ctrl+K switches), zoom in and out (Ctrl++, Ctrl+-) and back to the standard zoom (Ctrl+0).
-- **Edit > Select all** (Ctrl+A) selects the whole panel you last clicked in; **Esc** drops the selection. While the draft has focus, **P**, **L** and **S** pick the pencil, line and select tools (the letters are left alone in the number boxes).
+- **Edit > Select all** (Ctrl+A) selects the whole panel you last clicked in; **Esc** drops the selection. While the draft has focus, **P**, **L**, **C** and **S** pick the pencil, line, curve and select tools (the letters are left alone in the number boxes).
 - **Help > Keyboard shortcuts** (F1) lists every shortcut; **Help > About** shows the version. Hover over a toolbar button for a tip.
 
 ### Remembered settings
@@ -261,7 +262,6 @@ The recipe leaves out libraries the program does not use, which keeps the file a
 
 ## Notes & Limitations
 
-- Not yet implemented: a curve tool.
 - Block substitution, combining and network drafting work on the draft in the editor and replace it; drafts are limited to 400 ends and 400 picks and 32 shafts and treadles, so large results are refused with a message. Summer and winter is the only built-in block structure.
 - The float finder looks at the draft as drawn: it does not see floats that would form where the draft repeats. Yardage ignores the selvedge and does not convert to yarn weight.
 - Each end is threaded on at most one shaft.
