@@ -20,7 +20,7 @@ You can:
 - Colour every **warp end** and **weft pick** from an unlimited **palette**, with repeating **stripe** sequences
 - Switch the drawdown to a shaded **cloth view** that shows the yarns and their colours
 - **Open and save WIF** files, the interchange format of weaving software, to share drafts with other programs
-- **Export** the whole draft (all panels with numbered rulers) as a PNG (as drawn in the current view), or as a vector **SVG** or **PDF**
+- **Export** just the woven cloth as a clean PNG (as drawn in the current view), the whole draft (all panels with numbered rulers) as a PNG, or as a vector **SVG** or **PDF**
 - **Print** the draft on A4 or US Letter paper
 - Find **long floats** (shaded in red on the drawdown) and work out **yardage** per colour for a project
 - Get a warning before you lose **unsaved changes**, reopen **recent files**, and find your zoom, view and other choices remembered next time
@@ -62,6 +62,8 @@ pip install -r requirements.txt
    ```
 
 It opens with a 4-shaft 2/2 twill so you can see how the panels relate.
+
+A step-by-step guide to every button, menu and common task is in the [User Guide](docs/USER_GUIDE.md).
 
 To make a single `WeaveGenerator.exe` that needs no Python, see [Building a Windows .exe](#building-a-windows-exe-with-pyinstaller) below.
 
@@ -148,7 +150,8 @@ These open a window with the options, a live **Result** line (green when the dra
 - **Open WIF... / Save / Save as WIF...** (Ctrl+O, Ctrl+S, Ctrl+Shift+S): WIF is a text format read and written by most weaving programs. It keeps the size, shed direction, threading, tie-up, treadling (or liftplan), palette and thread colours. Opening a file replaces the draft but is a single undo step, so Ctrl+Z brings your previous draft back. The window title shows the open file and Save writes back to it.
 - **Open recent**: the last eight files you opened or saved, newest first. A file that has gone is removed from the list when you try it. **Clear list** empties it.
 - **Unsaved changes**: a `*` before the name in the title bar means the draft differs from the saved file (undoing back to the saved state removes it). New, Open, Open recent and Quit ask whether to **save**, **discard** or **cancel** first. Changing the view, zoom or float limit is not a change to the draft.
-- **Export PNG / SVG / PDF**: PNG follows the current view (Drawdown or Cloth). SVG and PDF are vector graphics that stay sharp at any size; they always show the flat colour drawdown. The PDF is a single page whose orientation is chosen so the draft prints as large as possible; choose **PDF page size** (A4 or US Letter) first.
+- **Export PNG (weave only)...**: saves just the woven cloth, with no threading, tie-up, treadling, colour strips, rulers or grid lines. It follows the current view (Drawdown or Cloth) and is 12 pixels per cell. **Export PNG (full draft)...** saves every panel with numbered rulers instead, also following the current view.
+- **Export SVG / PDF**: vector graphics that stay sharp at any size. SVG and PDF are vector graphics that stay sharp at any size; they always show the flat colour drawdown. The PDF is a single page whose orientation is chosen so the draft prints as large as possible; choose **PDF page size** (A4 or US Letter) first.
 - **Import drawdown from image...**: works out a draft from a picture of a drawdown, one pixel per cell (dark pixel = warp up; the left column is the last end; transparent counts as white; images larger than 400 x 400 are refused). Ends with identical columns share a shaft, and picks with identical rows share a treadle; more than 32 different picks gives a liftplan, and more than 32 different ends is an error. Your palette and shed direction are kept. It replaces the draft in one undo step.
 - **Print...**: makes a printable PDF and opens it in your PDF viewer, which has the Print command and printer choice. Nothing is sent to a printer directly.
 
@@ -182,7 +185,7 @@ Zoom, drawdown or cloth view, yarn width, float limit and which floats to show, 
 - **Liftplan**: switches the tie-up and treadling for a direct liftplan. Switching it on converts your current treadling, so the cloth does not change.
 - **Undo / Redo / Clear**: clear blanks the threading, tie-up, treadling and liftplan.
 - **Zoom** (`-` / `+` or Ctrl + mouse wheel): very large drafts are drawn smaller than the zoom shown so they stay within a workable size.
-- **Export PNG**: saves all panels, with rulers, as one image. It follows the current view, so Cloth gives a picture of the woven cloth.
+- **Export PNG**: saves only the woven cloth as an image. It follows the current view, so Cloth gives a picture of woven yarn. For all panels, use File > Export PNG (full draft).
 
 ---
 
@@ -211,7 +214,7 @@ weavegen/
     network.py         network drafting: design lines and networked threading/treadling
   io/
     wif.py             WIF reader and writer
-    png.py             whole-draft PNG export via Pillow
+    png.py             PNG export (weave only, or whole draft) via Pillow
     scene.py           vector description of the draft (rectangles, lines, labels) shared by SVG and PDF
     svg.py             SVG export
     pdf.py             PDF export (written directly, no extra library) and page placement

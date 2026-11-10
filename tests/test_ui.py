@@ -864,7 +864,8 @@ def test_the_file_menu_offers_the_new_commands_and_shortcuts(app):
     file_menu = submenu(app, "File")
     labels = [file_menu.entrycget(i, "label") for i in range(file_menu.index("end") + 1)
               if file_menu.type(i) in ("command", "cascade")]
-    for wanted in ("Open WIF...", "Save", "Save as WIF...", "Export PNG...", "Export SVG...",
+    for wanted in ("Open WIF...", "Save", "Save as WIF...", "Export PNG (weave only)...",
+                   "Export PNG (full draft)...", "Export SVG...",
                    "Export PDF...", "Print...", "PDF page size", "Quit"):
         assert wanted in labels
     assert app.root.bind("<Control-o>") and app.root.bind("<Control-s>")
@@ -1932,3 +1933,25 @@ def test_a_curve_error_is_reported_and_the_draft_is_untouched(app, monkeypatch):
 def test_curve_is_in_the_shortcut_help():
     from weavegen.ui import help as help_module
     assert "Curve" in help_module.shortcuts_text()
+
+
+def test_png_export_saves_only_the_weave_and_the_full_draft_has_its_own_command(app, monkeypatch, tmp_path):
+    from PIL import Image
+    monkeypatch.setattr(app_module.messagebox, "showinfo", lambda *a, **k: None)
+    weave, full = tmp_path / "weave.png", tmp_path / "full.png"
+    seen = {}
+    monkeypatch.setattr(app_module.filedialog, "asksaveasfilename", lambda **k: seen.update(k) or str(weave))
+    app.on_export()
+    assert seen["initialfile"].endswith(".png") and "_full" not in seen["initialfile"]
+    monkeypatch.setattr(app_module.filedialog, "asksaveasfilename", lambda **k: seen.update(k) or str(full))
+    app.on_export_full()
+    assert seen["initialfile"].endswith("_full.png")
+    a, b = Image.open(weave), Image.open(full)
+    assert a.size == (app.draft.ends * 12, app.draft.picks * 12)
+    assert b.width > a.width and b.height > a.height
+
+
+def test_cancelling_the_png_export_writes_nothing(app, monkeypatch):
+    monkeypatch.setattr(app_module.filedialog, "asksaveasfilename", lambda **k: "")
+    app.on_export()
+    app.on_export_full()
